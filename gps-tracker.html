@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FiloPro GPS Araç İzleme</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', system-ui, sans-serif; background: #0f1117; color: #e2e8f0; }
+    .container { display: flex; height: 100vh; }
+    #map { flex: 1; z-index: 1; }
+    .sidebar { width: 320px; background: #1e2333; border-right: 1px solid #2a3050; display: flex; flex-direction: column; overflow: hidden; }
+    .sidebar-header { padding: 16px; border-bottom: 1px solid #2a3050; background: #181c27; }
+    .sidebar-header h2 { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+    .sidebar-content { flex: 1; overflow-y: auto; padding: 12px; }
+    .vehicle-item { background: #242f5f; border: 1px solid #2a3050; border-radius: 8px; padding: 12px; margin-bottom: 8px; cursor: pointer; transition: all 0.2s; }
+    .vehicle-item:hover { border-color: #f59e0b; background: #2a3d70; }
+    .vehicle-item.active { border-color: #f59e0b; background: #3a4d80; }
+    .vehicle-name { font-weight: 600; font-size: 13px; margin-bottom: 6px; }
+    .vehicle-info { font-size: 11px; color: #8892b0; line-height: 1.5; }
+    .status-badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 600; margin-top: 6px; }
+    .status-active { background: #22c55e33; color: #22c55e; border: 1px solid #22c55e66; }
+    .status-inactive { background: #ef444433; color: #ef4444; border: 1px solid #ef444466; }
+    .route-info { display: flex; gap: 8px; font-size: 11px; margin-top: 8px; }
+    .route-info span { flex: 1; background: #1e2333; padding: 4px 8px; border-radius: 4px; }
+    .controls { padding: 12px; border-top: 1px solid #2a3050; display: flex; gap: 6px; }
+    button { background: #f59e0b; color: #000; border: none; border-radius: 6px; padding: 8px 12px; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+    button:hover { filter: brightness(1.1); }
+    button.secondary { background: transparent; color: #8892b0; border: 1px solid #2a3050; }
+    .legend { position: absolute; bottom: 16px; left: 16px; background: rgba(15,17,23,0.9); border: 1px solid #2a3050; border-radius: 8px; padding: 12px; z-index: 400; font-size: 12px; }
+    .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .legend-color { width: 12px; height: 12px; border-radius: 50%; }
+    .loading { text-align: center; padding: 24px; color: #8892b0; }
+    .error { padding: 12px; background: #ef444422; border: 1px solid #ef444466; border-radius: 6px; color: #ef4444; font-size: 12px; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div id="map"></div>
+    
+    <div class="sidebar">
+      <div class="sidebar-header">
+        <h2>📍 Araç İzleme</h2>
+        <p style="font-size: 11px; color: #8892b0; margin: 0;">Canlı Konum</p>
+      </div>
+      
+      <div class="sidebar-content" id="vehicleList">
+        <div class="loading">Araçlar yükleniyor...</div>
+      </div>
+      
+      <div class="controls">
+        <button id="refreshBtn">🔄 Yenile</button>
+        <button id="closeBtn" class="secondary">✕ Kapat</button>
+      </div>
+    </div>
+    
+    <div class="legend">
+      <div class="legend-item">
+        <div class="legend-color" style="background: #22c55e;"></div>
+        <span>Aktif Araç</span>
+      </div>
+      <div class="legend-item">
+        <div class="legend-color" style="background: #f59e0b;"></div>
+        <span>Seçili Araç</span>
+      </div>
+      <div class="legend-item">
+        <div class="legend-color" style="background: #ef4444;"></div>
+        <span>Çevrimdışı</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ─── HArita başlatması ──────────────────────────────
+    const map = L.map('map').setView([38.76, 27.32], 8);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap',
+      maxZoom: 19,
+    }).addTo(map);
+
+    let vehicles = {};
+    let selectedVehicle = null;
+    let vehicleMarkers = {};
+    let routeLines = {};
+
+    // ─── Harita ikonu oluşturucu ──────────────────────────────
+    function getVehicleIcon(color) {
+      return L.divIcon({
+        className: 'vehicle-marker',
+        html: `<div style="
+          background: ${color}; 
+          border: 3px solid white; 
+          width: 32px; 
+          height: 32px; 
+          border-radius: 50%; 
+          display: flex; 
+          align-items: center; 
+          justify-content: center;
+          font-size: 16px;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        ">🚜</div>`,
+        iconSize: [32, 32],
+        iconAnchor: [16, 16],
+      });
+    }
+
+    // ─── Araçları sunucudan getir ──────────────────────────────
+    async function loadVehicles() {
+      try {
+        const cfg = JSON.parse(localStorage.getItem('fp_sync_cfg') || '{}');
+        if (!cfg.token || !cfg.url) {
+          document.getElementById('vehicleList').innerHTML = 
+            '<div class="error">⚠️ Sunucu bağlantısı yapılandırılmadı</div>';
+          return;
+        }
+
+        const res = await fetch(`${cfg.url}/api/gps/vehicles`, {
+          headers: { 'Authorization': `Bearer ${cfg.token}` }
+        });
+        if (!res.ok) throw new Error('Araçlar alınamadı');
+        
+        const data = await res.json();
+        vehicles = data.vehicles.reduce((acc, v) => {
+          acc[v.vehicleId] = v;
+          return acc;
+        }, {});
+
+        renderVehicleList();
+        updateMapMarkers();
+      } catch (e) {
+        document.getElementById('vehicleList').innerHTML = 
+          `<div class="error">⚠️ Hata: ${e.message}</div>`;
+      }
+    }
+
+    // ─── Araç listesini UI'da göster ──────────────────────────────
+    function renderVehicleList() {
+      const list = document.getElementById('vehicleList');
+      if (Object.keys(vehicles).length === 0) {
+        list.innerHTML = '<div class="loading">Henüz araç verisi yok</div>';
+        return;
+      }
+
+      list.innerHTML = Object.entries(vehicles).map(([id, v]) => `
+        <div class="vehicle-item ${selectedVehicle === id ? 'active' : ''}" data-vehicle-id="${id}">
+          <div class="vehicle-name">${v.vehicleId}</div>
+          <div class="vehicle-info">
+            ${v.location ? `
+              📍 ${v.location.lat.toFixed(4)}, ${v.location.lng.toFixed(4)}<br>
+              🏃 ${v.location.speed.toFixed(1)} km/h<br>
+              ⏱️ ${new Date(v.lastUpdate).toLocaleTimeString('tr-TR')}
+            ` : 'Konum verisi yok'}
+          </div>
+          <div class="status-badge ${v.location ? 'status-active' : 'status-inactive'}">
+            ${v.location ? '● Aktif' : '● Çevrimdışı'}
+          </div>
+          ${v.historyCount ? `
+            <div class="route-info">
+              <span>🛣️ ${v.historyCount} konum</span>
+            </div>
+          ` : ''}
+        </div>
+      `).join('');
+
+      document.querySelectorAll('.vehicle-item').forEach(el => {
+        el.addEventListener('click', () => selectVehicle(el.dataset.vehicleId));
+      });
+    }
+
+    // ─── Araç seçme ──────────────────────────────────
+    async function selectVehicle(vehicleId) {
+      selectedVehicle = vehicleId;
+      renderVehicleList();
+      
+      try {
+        const cfg = JSON.parse(localStorage.getItem('fp_sync_cfg') || '{}');
+        const res = await fetch(`${cfg.url}/api/gps/route/${vehicleId}`, {
+          headers: { 'Authorization': `Bearer ${cfg.token}` }
+        });
+        if (!res.ok) throw new Error('Rota alınamadı');
+        
+        const data = await res.json();
+        showRoute(vehicleId, data.route);
+        if (data.currentLocation) {
+          map.setView([data.currentLocation.lat, data.currentLocation.lng], 13);
+        }
+      } catch (e) {
+        console.error('Rota yükleme hatası:', e);
+      }
+    }
+
+    // ─── Rota göster ──────────────────────────────────
+    function showRoute(vehicleId, route) {
+      // Önceki rotayı temizle
+      if (routeLines[vehicleId]) {
+        map.removeLayer(routeLines[vehicleId]);
+      }
+
+      if (route.length > 0) {
+        const points = route.map(p => [p.lat, p.lng]);
+        routeLines[vehicleId] = L.polyline(points, {
+          color: '#f59e0b',
+          weight: 3,
+          opacity: 0.7,
+          dashArray: '5,5',
+        }).addTo(map);
+      }
+    }
+
+    // ─── Harita işaretçileri güncelle ──────────────────────────────
+    function updateMapMarkers() {
+      Object.entries(vehicles).forEach(([id, v]) => {
+        if (v.location) {
+          const isSelected = id === selectedVehicle;
+          const color = isSelected ? '#f59e0b' : '#22c55e';
+          
+          if (vehicleMarkers[id]) {
+            vehicleMarkers[id].setLatLng([v.location.lat, v.location.lng]);
+          } else {
+            vehicleMarkers[id] = L.marker(
+              [v.location.lat, v.location.lng],
+              { icon: getVehicleIcon(color) }
+            ).bindPopup(`<strong>${id}</strong><br>Hız: ${v.location.speed.toFixed(1)} km/h`).addTo(map);
+          }
+        }
+      });
+    }
+
+    // ─── Buton olayları ──────────────────────────────────
+    document.getElementById('refreshBtn').addEventListener('click', loadVehicles);
+    document.getElementById('closeBtn').addEventListener('click', () => {
+      if (window.opener) window.close();
+      else window.history.back();
+    });
+
+    // ─── İlk yükleme ve periyodik güncelleme ──────────────────────────────
+    loadVehicles();
+    setInterval(loadVehicles, 10000); // Her 10 saniyede bir yenile
+  </script>
+</body>
+</html>
