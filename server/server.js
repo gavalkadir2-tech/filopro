@@ -8,6 +8,7 @@
 // Depolama: veritabanı gerektirmez, düz JSON dosyalarında tutulur:
 //   data/users.json              -> tüm kullanıcılar (hangi şirkete ait, rolü, şifre hash'i)
 //   data/tenants/<tenantId>.json -> o şirkete ait tüm FiloPro tabloları
+//   data/gps/<tenantId>.json     -> o şirkete ait GPS izleme verileri
 
 require('dotenv').config();
 const express = require('express');
@@ -28,6 +29,7 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY; // opsiyonel: yoksa sadece AI mod
 
 const DATA_DIR = path.join(__dirname, 'data');
 const TENANTS_DIR = path.join(DATA_DIR, 'tenants');
+const GPS_DIR = path.join(DATA_DIR, 'gps');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 
 if (!JWT_SECRET) {
@@ -36,6 +38,7 @@ if (!JWT_SECRET) {
 }
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(TENANTS_DIR)) fs.mkdirSync(TENANTS_DIR, { recursive: true });
+if (!fs.existsSync(GPS_DIR)) fs.mkdirSync(GPS_DIR, { recursive: true });
 if (!fs.existsSync(USERS_FILE)) fs.writeFileSync(USERS_FILE, JSON.stringify({ users: [] }));
 
 // ── Dosya yardımcıları (atomic write: yarıda kesilen yazmalarda veri bozulmaz) ─
@@ -69,6 +72,15 @@ function readAiConfig(tenantId) {
 function writeAiConfig(tenantId, cfg) {
   writeJsonAtomic(aiConfigFile(tenantId), cfg);
 }
+function gpsFile(tenantId) {
+  return path.join(GPS_DIR, `${tenantId}.json`);
+}
+function readGpsData(tenantId) {
+  return readJson(gpsFile(tenantId), { vehicles: {}, routes: [] });
+}
+function writeGpsData(tenantId, data) {
+  writeJsonAtomic(gpsFile(tenantId), data);
+}
 function readUsers() {
   return readJson(USERS_FILE, { users: [] }).users;
 }
@@ -76,7 +88,7 @@ function writeUsers(users) {
   writeJsonAtomic(USERS_FILE, { users });
 }
 
-// ── Kimlik doğrulama ───────────────────────────────────────────────────────────
+// ── Kimlik doğrulama ────────────────────────────────────────────────────────[...]
 function authMiddleware(req, res, next) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
@@ -147,10 +159,11 @@ app.post('/api/auth/register', rateLimit('register', 10), async (req, res) => {
   users.push(user);
   writeUsers(users);
   writeTenantStore(tenantId, {}); // boş şirket veri deposu oluştur
+  writeGpsData(tenantId, { vehicles: {}, routes: [] }); // GPS veri deposu oluştur
   res.json({ token: signToken(user), companyName: user.companyName, role: user.role });
 });
 
-// ── Giriş ────────────────────────────────────────────────────────────────────
+// ── Giriş ───────────────────────────────────────────────────────────[...]
 app.post('/api/auth/login', rateLimit('login', 15), async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'Kullanıcı adı ve şifre gerekli.' });
@@ -250,6 +263,118 @@ app.post('/api/sync/push', authMiddleware, (req, res) => {
   });
   writeTenantStore(req.user.tenantId, store);
   res.json({ applied, rejected, serverTime: Date.now() });
+});
+
+// ── GPS İzleme API'sı ───────────────────────────────────────────────────────────
+// Canlı araç konum güncellemesi (mobil uygulamadan veya IoT cihazından gelen)
+app.post('/api/gps/update', authMiddleware, rateLimit('gps', 1000), (req, res) => {
+  const { vehicleId, latitude, longitude, speed, heading, accuracy } = req.body || {};
+  if (!vehicleId || latitude === undefined || longitude === undefined) {
+    return res.status(400).json({ error: 'vehicleId, latitude ve longitude gerekli.' });
+  }
+  
+  const gpsData = readGpsData(req.user.tenantId);
+  const now = Date.now();
+  
+  if (!gpsData.vehicles[vehicleId]) {
+    gpsData.vehicles[vehicleId] = {
+      lastLocation: null,
+      lastUpdate: now,
+      history: [],
+    };
+  }
+  
+  const vehicle = gpsData.vehicles[vehicleId];
+  const newLocation = {
+    lat: parseFloat(latitude),
+    lng: parseFloat(longitude),
+    speed: parseFloat(speed) || 0,
+    heading: parseFloat(heading) || 0,
+    accuracy: parseFloat(accuracy) || 0,
+    timestamp: now,
+  };
+  
+  // Rota geçmişine ekle (en fazla son 1000 konum tutulur)
+  vehicle.history.push(newLocation);
+  if (vehicle.history.length > 1000) {
+    vehicle.history = vehicle.history.slice(-1000);
+  }
+  
+  vehicle.lastLocation = newLocation;
+  vehicle.lastUpdate = now;
+  
+  writeGpsData(req.user.tenantId, gpsData);
+  res.json({ ok: true, timestamp: now });
+});
+
+// Tüm araçların canlı konum ve durum bilgisi
+app.get('/api/gps/vehicles', authMiddleware, (req, res) => {
+  const gpsData = readGpsData(req.user.tenantId);
+  const vehicles = Object.entries(gpsData.vehicles).map(([id, data]) => ({
+    vehicleId: id,
+    location: data.lastLocation,
+    lastUpdate: data.lastUpdate,
+    historyCount: data.history.length,
+  }));
+  res.json({ vehicles, serverTime: Date.now() });
+});
+
+// Belirli bir araçın tam rota geçmişi
+app.get('/api/gps/route/:vehicleId', authMiddleware, (req, res) => {
+  const vehicleId = String(req.params.vehicleId);
+  const gpsData = readGpsData(req.user.tenantId);
+  const vehicle = gpsData.vehicles[vehicleId];
+  
+  if (!vehicle) {
+    return res.status(404).json({ error: 'Araç bulunamadı.' });
+  }
+  
+  res.json({
+    vehicleId,
+    currentLocation: vehicle.lastLocation,
+    route: vehicle.history,
+    lastUpdate: vehicle.lastUpdate,
+  });
+});
+
+// Zaman aralığına göre rota geçmişi (filtreleme)
+app.get('/api/gps/route/:vehicleId/range', authMiddleware, (req, res) => {
+  const vehicleId = String(req.params.vehicleId);
+  const startTime = parseInt(req.query.start || '0', 10);
+  const endTime = parseInt(req.query.end || Date.now(), 10);
+  
+  const gpsData = readGpsData(req.user.tenantId);
+  const vehicle = gpsData.vehicles[vehicleId];
+  
+  if (!vehicle) {
+    return res.status(404).json({ error: 'Araç bulunamadı.' });
+  }
+  
+  const filteredRoute = vehicle.history.filter(
+    (loc) => loc.timestamp >= startTime && loc.timestamp <= endTime
+  );
+  
+  res.json({
+    vehicleId,
+    startTime,
+    endTime,
+    route: filteredRoute,
+    count: filteredRoute.length,
+  });
+});
+
+// Araç GPS verilerini temizle (eski veriler silinir, dağlık durum sağlanır)
+app.delete('/api/gps/vehicle/:vehicleId', authMiddleware, adminOnly, (req, res) => {
+  const vehicleId = String(req.params.vehicleId);
+  const gpsData = readGpsData(req.user.tenantId);
+  
+  if (!gpsData.vehicles[vehicleId]) {
+    return res.status(404).json({ error: 'Araç bulunamadı.' });
+  }
+  
+  delete gpsData.vehicles[vehicleId];
+  writeGpsData(req.user.tenantId, gpsData);
+  res.json({ ok: true });
 });
 
 // ── Yapay Zeka Vekili (Proxy) ────────────────────────────────────────────────
@@ -377,4 +502,5 @@ app.post('/api/ai/chat', authMiddleware, aiRateLimit, async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`FiloPro senkron sunucusu (çok kiracılı) http://localhost:${PORT} adresinde çalışıyor.`);
+  console.log(`📍 GPS İzleme API aktif: POST /api/gps/update, GET /api/gps/vehicles, GET /api/gps/route/:vehicleId`);
 });
