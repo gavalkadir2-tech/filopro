@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>📍 Konum Paylaşımı — FiloPro</title>
+<meta name="mobile-web-app-capable" content="yes">
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<style>
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f1117;color:#e5e7eb;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px;}
+  .card{max-width:420px;width:100%;background:#181b24;border:1px solid #2a2d3a;border-radius:16px;padding:28px 24px;text-align:center;}
+  h1{font-size:20px;margin:0 0 6px;}
+  p{color:#9ca3af;font-size:14px;line-height:1.6;}
+  .status{margin-top:20px;padding:14px;border-radius:10px;font-size:14px;font-weight:600;}
+  .status.bekliyor{background:#2a2d3a;color:#9ca3af;}
+  .status.aktif{background:rgba(34,197,94,.12);color:#22c55e;}
+  .status.hata{background:rgba(239,68,68,.12);color:#ef4444;}
+  button{margin-top:18px;width:100%;padding:14px;border:none;border-radius:10px;background:#f59e0b;color:#0f1117;font-size:15px;font-weight:700;cursor:pointer;}
+  button:disabled{opacity:.5;}
+  .detay{margin-top:16px;font-size:12px;color:#6b7280;}
+</style>
+</head>
+<body>
+<div class="card">
+  <div style="font-size:40px;">📍</div>
+  <h1 id="baslik">Konum Paylaşımı</h1>
+  <p id="aciklama">Bu bağlantı, konumunuzu FiloPro'daki canlı personel haritasında göstermek için kullanılır. Devam etmek için konum izni vermeniz gerekir.</p>
+  <div id="durum" class="status bekliyor">Henüz başlatılmadı</div>
+  <button id="baslatBtn">Konum Paylaşımını Başlat</button>
+  <div class="detay" id="detay"></div>
+</div>
+<script>
+(function(){
+  var params=new URLSearchParams(window.location.search);
+  var pid=params.get('pid');
+  var cfg={apiKey:params.get('apiKey'),authDomain:params.get('authDomain'),databaseURL:params.get('databaseURL'),projectId:params.get('projectId')};
+  var durumEl=document.getElementById('durum');
+  var detayEl=document.getElementById('detay');
+  var btn=document.getElementById('baslatBtn');
+  var watchId=null;
+
+  function durum(sinif,metin){durumEl.className='status '+sinif;durumEl.textContent=metin;}
+
+  if(!pid||!cfg.apiKey||!cfg.databaseURL){
+    durum('hata','Geçersiz bağlantı — eksik parametre.');
+    btn.disabled=true;
+    return;
+  }
+
+  var app=firebase.initializeApp(cfg);
+  var db=firebase.database();
+
+  function gonder(pos){
+    var veri={
+      lat:pos.coords.latitude,
+      lng:pos.coords.longitude,
+      dogruluk:pos.coords.accuracy,
+      hiz:pos.coords.speed||null,
+      zaman:Date.now()
+    };
+    db.ref('konumlar/'+pid).set(veri).then(function(){
+      durum('aktif','🟢 Konum paylaşılıyor');
+      detayEl.textContent='Son güncelleme: '+new Date().toLocaleTimeString('tr-TR')+' · Doğruluk: ±'+Math.round(pos.coords.accuracy)+'m';
+    }).catch(function(e){
+      durum('hata','Sunucuya yazılamadı: '+e.message);
+    });
+  }
+
+  function hata(err){
+    durum('hata','Konum alınamadı: '+err.message+'. Lütfen tarayıcı ayarlarından konum iznini kontrol edin.');
+  }
+
+  btn.addEventListener('click',function(){
+    if(!navigator.geolocation){durum('hata','Bu tarayıcı konum servisini desteklemiyor.');return;}
+    btn.textContent='Paylaşım Aktif — Bu Sekmeyi Açık Tutun';
+    btn.disabled=true;
+    durum('bekliyor','İzin isteniyor...');
+    watchId=navigator.geolocation.watchPosition(gonder,hata,{enableHighAccuracy:true,maximumAge:10000,timeout:20000});
+    // Sekme arka plana alınsa da tarayıcı izin verdiği sürece göndermeye devam eder;
+    // sekme tamamen kapatılırsa paylaşım durur.
+    window.addEventListener('beforeunload',function(){
+      if(watchId!==null)navigator.geolocation.clearWatch(watchId);
+    });
+  });
+})();
+</script>
+</body>
+</html>
