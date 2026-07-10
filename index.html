@@ -838,6 +838,20 @@ const musteriAd=(id)=>cariById(id)?.ad||'—';
 const tedarikciAd=(id)=>cariById(id)?.ad||'—';
 const hesapAd=(id)=>LS.get('hesaplar').find(h=>h.id===id)?.ad||'—';
 const cariAd=(f)=>f.tur==='kesilen'?musteriAd(f.musteriId):tedarikciAd(f.tedarikciId);
+const cariTel=(id)=>cariById(id)?.tel||'';
+const faturaWaLink=(f,hareketler)=>{
+  const tel=cariTel(f.tur==='kesilen'?f.musteriId:f.tedarikciId);
+  if(!tel)return null;
+  const kalan=faturaKalan(f,hareketler);
+  const mesaj=`🧾 Fatura Bildirimi\nFatura No: ${f.no}\nTarih: ${fmtDate(f.tarih)}\nVade: ${fmtDate(f.vadeTarih)}\nTutar: ${fmtTL(f.toplam)}${kalan>0&&kalan<f.toplam?`\nKalan: ${fmtTL(kalan)}`:''}${f.aciklama?`\nAçıklama: ${f.aciklama}`:''}${kalan<=0?'\n✅ Ödendi, teşekkür ederiz.':''}`;
+  return whatsappLinkOlustur(tel,mesaj);
+};
+const hareketWaLink=(h)=>{
+  const tel=cariTel(h.kategori==='tahsilat'?h.musteriId:h.tedarikciId);
+  if(!tel)return null;
+  const mesaj=`${h.kategori==='tahsilat'?'💵 Tahsilat Bildirimi':'💸 Ödeme Bildirimi'}\nBelge No: ${h.belgeNo}\nTarih: ${fmtDate(h.tarih)}\nTutar: ${fmtTL(h.tutar)}\nYöntem: ${h.yontem||'—'}${h.aciklama?`\nAçıklama: ${h.aciklama}`:''}\nTeşekkür ederiz.`;
+  return whatsappLinkOlustur(tel,mesaj);
+};
 const faturaOdenen=(faturaId,hareketler)=>(hareketler||LS.get('kasaHareketleri')).filter(h=>h.faturaId===faturaId).reduce((s,h)=>s+(+h.tutar||0),0);
 const faturaKalan=(f,hareketler)=>(+f.toplam||0)-faturaOdenen(f.id,hareketler);
 const faturaDurum=(f,hareketler)=>{const kalan=faturaKalan(f,hareketler);if(kalan<=0)return'odendi';const odenen=faturaOdenen(f.id,hareketler);if(odenen>0)return'kismiOdendi';if(daysLeft(f.vadeTarih)<0)return'vadesiGecti';return'bekliyor';};
@@ -3151,7 +3165,7 @@ function Faturalar(){
   const dosyaAdi=(uzanti)=>`faturalar-${tab==='kesilen'?'kesilen':'alinan'}-${today()}.${uzanti}`;
   const csvIndir=()=>{exportCSV(FATURA_BASLIKLAR,faturaSatirlari(sirali),dosyaAdi('csv'));setExportOpen(false);};
   const xlsxIndir=()=>{exportXLSX(FATURA_BASLIKLAR,faturaSatirlari(sirali),dosyaAdi('xlsx'),tab==='kesilen'?'Kesilen Faturalar':'Alınan Faturalar');setExportOpen(false);};
-  const openPay=(f)=>{setPayForm({faturaId:f.id,tutar:faturaKalan(f,hareketler),tarih:today(),hesapId:hesaplar.find(h=>h.tur==='aktif')?.id,yontem:'havale'});setPayModal(true);};
+  const openPay=(f)=>{setPayForm({faturaId:f.id,tutar:faturaKalan(f,hareketler),tarih:today(),hesapId:hesaplar.find(h=>h.tur==='aktif')?.id,personelId:f.personelId||null,yontem:'havale'});setPayModal(true);};
   const savePay=()=>{
     const f=faturalar.find(x=>x.id===payForm.faturaId);if(!f)return;
     const kategori=f.tur==='kesilen'?'tahsilat':'odeme';
@@ -3200,7 +3214,7 @@ function Faturalar(){
       <td style={S.td}><strong style={{color:C.accent}}>{fmtTL(f.toplam)}</strong></td>
       <td style={S.td}>{f.kalan>0?<strong style={{color:C.yellow}}>{fmtTL(f.kalan)}</strong>:<span style={{color:C.muted}}>—</span>}</td>
       <td style={S.td}><Badge d={f.durum}/></td>
-      <td style={S.td}><div style={{display:'flex',gap:5}}><button style={S.btnO} onClick={()=>setDetayFatura(f)}>👁️</button>{f.kalan>0&&<button style={S.btn(C.green)} onClick={()=>openPay(f)}>{f.tur==='kesilen'?'💵 Tahsil':'💸 Öde'}</button>}<button style={S.btnO} onClick={()=>printInvoice(f,hareketler)}>🖨️</button><button style={S.btnO} onClick={()=>{setForm(f);setErr('');setModal(true);}}>✏️</button><button style={S.btnR} onClick={()=>del(f.id)}>🗑</button></div></td>
+      <td style={S.td}><div style={{display:'flex',gap:5,flexWrap:'wrap'}}><button style={S.btnO} onClick={()=>setDetayFatura(f)}>👁️</button>{f.kalan>0&&<button style={S.btn(C.green)} onClick={()=>openPay(f)}>{f.tur==='kesilen'?'💵 Tahsil':'💸 Öde'}</button>}{faturaWaLink(f,hareketler)&&<a href={faturaWaLink(f,hareketler)} target="_blank" rel="noopener noreferrer" style={{...S.btnO,textDecoration:'none',display:'inline-block'}} title="WhatsApp'tan Gönder">📲</a>}<button style={S.btnO} onClick={()=>printInvoice(f,hareketler)}>🖨️</button><button style={S.btnO} onClick={()=>{setForm(f);setErr('');setModal(true);}}>✏️</button><button style={S.btnR} onClick={()=>del(f.id)}>🗑</button></div></td>
     </tr>))}</tbody></table>
     {sirali.length>0&&(<div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:10,marginTop:14,paddingTop:14,borderTop:`1px solid ${C.border}`}}>
       <div style={{display:'flex',alignItems:'center',gap:8,fontSize:12,color:C.muted}}>Sayfa başına:
@@ -3218,10 +3232,12 @@ function Faturalar(){
     {modal&&(<Modal title={form.id?'Fatura Düzenle':'Yeni Fatura'} onClose={()=>setModal(false)}>
       <FG label="Tür"><select style={S.sel} value={form.tur||'kesilen'} onChange={e=>setForm(f=>({...f,tur:e.target.value,musteriId:null,tedarikciId:null}))}><option value="kesilen">Kesilen (Satış)</option><option value="alinan">Alınan (Alış)</option></select></FG>
       {form.tur!=='alinan'?(
-        <FG label="Müşteri"><div style={S.selRow}><select style={S.sel} value={form.musteriId||''} onChange={e=>setForm(f=>({...f,musteriId:idVal(e.target.value)}))}><option value="">— Seçiniz —</option>{musteriler.map(m=><option key={m.id} value={m.id}>{m.ad}</option>)}</select><button type="button" style={S.btnAdd} title="Yeni Müşteri Ekle" onClick={()=>setHizliEkle('musteri')}>＋</button></div></FG>
+        <FG label="Müşteri"><div style={S.selRow}><select style={S.sel} value={form.musteriId||''} onChange={e=>{const cid=idVal(e.target.value);const c=musteriler.find(m=>m.id===cid);setForm(f=>({...f,musteriId:cid,personelId:f.personelId||c?.sorumluId||null}));}}><option value="">— Seçiniz —</option>{musteriler.map(m=><option key={m.id} value={m.id}>{m.ad}</option>)}</select><button type="button" style={S.btnAdd} title="Yeni Müşteri Ekle" onClick={()=>setHizliEkle('musteri')}>＋</button></div></FG>
       ):(
-        <FG label="Tedarikçi"><div style={S.selRow}><select style={S.sel} value={form.tedarikciId||''} onChange={e=>setForm(f=>({...f,tedarikciId:idVal(e.target.value)}))}><option value="">— Seçiniz —</option>{tedarikciler.map(t=><option key={t.id} value={t.id}>{t.ad}</option>)}</select><button type="button" style={S.btnAdd} title="Yeni Tedarikçi Ekle" onClick={()=>setHizliEkle('tedarikci')}>＋</button></div></FG>
+        <FG label="Tedarikçi"><div style={S.selRow}><select style={S.sel} value={form.tedarikciId||''} onChange={e=>{const cid=idVal(e.target.value);const c=tedarikciler.find(t=>t.id===cid);setForm(f=>({...f,tedarikciId:cid,personelId:f.personelId||c?.sorumluId||null}));}}><option value="">— Seçiniz —</option>{tedarikciler.map(t=><option key={t.id} value={t.id}>{t.ad}</option>)}</select><button type="button" style={S.btnAdd} title="Yeni Tedarikçi Ekle" onClick={()=>setHizliEkle('tedarikci')}>＋</button></div></FG>
       )}
+      {(()=>{const c=form.tur!=='alinan'?musteriler.find(m=>m.id===form.musteriId):tedarikciler.find(t=>t.id===form.tedarikciId);if(!c)return null;const sorumlu=personel.find(p=>p.id===c.sorumluId);const bk=form.tur!=='alinan'?musteriBakiye(c.id,faturalar,hareketler):tedarikciBakiye(c.id,faturalar,hareketler);return(<InfoBox color={C.blue}>{sorumlu?`👤 Sorumlu: ${sorumlu.ad}`:'👤 Sorumlu personel tanımlı değil'} · {form.tur!=='alinan'?'Açık Alacak':'Açık Borç'}: <strong>{fmtTL(bk.bakiye)}</strong></InfoBox>);})()}
+      <FG label="Sorumlu Personel (opsiyonel)"><select style={S.sel} value={form.personelId??''} onChange={e=>setForm(f=>({...f,personelId:idVal(e.target.value)}))}><option value="">— Seçiniz —</option>{personel.map(p=><option key={p.id} value={p.id}>{p.ad}</option>)}</select></FG>
       <FG label="Açıklama"><input style={S.inp} value={form.aciklama||''} onChange={e=>setForm(f=>({...f,aciklama:e.target.value}))}/></FG>
       <div style={S.g2}><FG label="Fatura Tarihi"><input type="date" style={S.inp} value={form.tarih||''} onChange={e=>setForm(f=>({...f,tarih:e.target.value}))}/></FG><FG label="Vade Tarihi"><input type="date" style={S.inp} value={form.vadeTarih||''} onChange={e=>setForm(f=>({...f,vadeTarih:e.target.value}))}/></FG></div>
       <TutarKdvAlani form={form} setForm={setForm}/>
@@ -3297,6 +3313,7 @@ function FaturaDetay({f,onClose,onOde,onDuzenle,onSil}){
     )}
     <div style={{display:'flex',gap:10,justifyContent:'flex-end',flexWrap:'wrap',marginTop:16}}>
       {kalan>0&&<button style={S.btn(C.green)} onClick={()=>{onClose();onOde(f);}}>{f.tur==='kesilen'?'💵 Tahsilat Kaydet':'💸 Ödeme Kaydet'}</button>}
+      {faturaWaLink(f,hareketler)?<a href={faturaWaLink(f,hareketler)} target="_blank" rel="noopener noreferrer" style={{...S.btn(C.green),textDecoration:'none',display:'inline-block'}}>📲 WhatsApp'tan Gönder</a>:<div style={{fontSize:11,color:C.muted,alignSelf:'center'}}>ℹ️ Bu cari için telefon numarası tanımlı değil</div>}
       <button style={S.btnO} onClick={()=>printInvoice(f,hareketler)}>🖨️ Yazdır / PDF</button>
       <button style={S.btnO} onClick={()=>{onClose();onDuzenle(f);}}>✏️ Düzenle</button>
       <button style={S.btnR} onClick={async()=>{if((await fpConfirm('Bu fatura silinsin mi? Bu işlem geri alınamaz.'))){onClose();onSil(f.id);}}}>🗑 Sil</button>
@@ -3414,8 +3431,8 @@ function TahsilatOdeme(){
       <StatCard color={C.accent} value={filtreli.length} label="Kayıt Sayısı"/>
     </div>
     <div style={{display:'flex',justifyContent:'flex-end',marginBottom:14}}><button style={S.btn(tab==='tahsilat'?C.green:C.red)} onClick={()=>{setForm({tarih:today(),yontem:'havale',hesapId:hesaplar.find(h=>h.tur==='aktif')?.id});setModal(true);}}>＋ {tab==='tahsilat'?'Tahsilat Ekle':'Ödeme Ekle'}</button></div>
-    <div style={S.card}><table style={S.tbl}><thead><tr><th style={S.th}>Belge No</th><th style={S.th}>{tab==='tahsilat'?'Müşteri':'Tedarikçi'}</th><th style={S.th}>Sorumlu</th><th style={S.th}>Fatura</th><th style={S.th}>Hesap</th><th style={S.th}>Tarih</th><th style={S.th}>Yöntem</th><th style={S.th}>Tutar</th></tr></thead>
-    <tbody>{[...filtreli].sort((a,b)=>b.tarih?.localeCompare(a.tarih)).map(h=>{const f=h.faturaId?faturalar.find(x=>x.id===h.faturaId):null;const sorumlu=personel.find(p=>p.id===h.personelId);return(<tr key={h.id}>
+    <div style={S.card}><table style={S.tbl}><thead><tr><th style={S.th}>Belge No</th><th style={S.th}>{tab==='tahsilat'?'Müşteri':'Tedarikçi'}</th><th style={S.th}>Sorumlu</th><th style={S.th}>Fatura</th><th style={S.th}>Hesap</th><th style={S.th}>Tarih</th><th style={S.th}>Yöntem</th><th style={S.th}>Tutar</th><th style={S.th}></th></tr></thead>
+    <tbody>{[...filtreli].sort((a,b)=>b.tarih?.localeCompare(a.tarih)).map(h=>{const f=h.faturaId?faturalar.find(x=>x.id===h.faturaId):null;const sorumlu=personel.find(p=>p.id===h.personelId);const waLink=hareketWaLink(h);return(<tr key={h.id}>
       <td style={S.td}><code style={{fontSize:11,color:C.muted}}>{h.belgeNo}</code></td>
       <td style={S.td}>{tab==='tahsilat'?musteriAd(h.musteriId):tedarikciAd(h.tedarikciId)}</td>
       <td style={S.td}>{sorumlu?.ad||'—'}</td>
@@ -3424,13 +3441,15 @@ function TahsilatOdeme(){
       <td style={S.td}>{fmtDate(h.tarih)}</td>
       <td style={S.td}><span style={{fontSize:12,textTransform:'capitalize'}}>{h.yontem||'—'}</span></td>
       <td style={S.td}><strong style={{color:tab==='tahsilat'?C.green:C.red}}>{fmtTL(h.tutar)}</strong></td>
+      <td style={S.td}>{waLink&&<a href={waLink} target="_blank" rel="noopener noreferrer" style={{...S.btnO,textDecoration:'none',display:'inline-block'}} title="WhatsApp'tan Gönder">📲</a>}</td>
     </tr>);})}</tbody></table></div>
     {modal&&(<Modal title={tab==='tahsilat'?'💵 Yeni Tahsilat':'💸 Yeni Ödeme'} onClose={()=>setModal(false)}>
       {tab==='tahsilat'?(
-        <FG label="Müşteri"><div style={S.selRow}><select style={S.sel} value={form.musteriId||''} onChange={e=>setForm(f=>({...f,musteriId:idVal(e.target.value),faturaId:''}))}><option value="">— Seçiniz —</option>{musteriler.map(m=><option key={m.id} value={m.id}>{m.ad}</option>)}</select><button type="button" style={S.btnAdd} title="Yeni Müşteri Ekle" onClick={()=>setHizliEkle('musteri')}>＋</button></div></FG>
+        <FG label="Müşteri"><div style={S.selRow}><select style={S.sel} value={form.musteriId||''} onChange={e=>{const cid=idVal(e.target.value);const c=musteriler.find(m=>m.id===cid);setForm(f=>({...f,musteriId:cid,faturaId:'',personelId:f.personelId||c?.sorumluId||null}));}}><option value="">— Seçiniz —</option>{musteriler.map(m=><option key={m.id} value={m.id}>{m.ad}</option>)}</select><button type="button" style={S.btnAdd} title="Yeni Müşteri Ekle" onClick={()=>setHizliEkle('musteri')}>＋</button></div></FG>
       ):(
-        <FG label="Tedarikçi"><div style={S.selRow}><select style={S.sel} value={form.tedarikciId||''} onChange={e=>setForm(f=>({...f,tedarikciId:idVal(e.target.value),faturaId:''}))}><option value="">— Seçiniz —</option>{tedarikciler.map(t=><option key={t.id} value={t.id}>{t.ad}</option>)}</select><button type="button" style={S.btnAdd} title="Yeni Tedarikçi Ekle" onClick={()=>setHizliEkle('tedarikci')}>＋</button></div></FG>
+        <FG label="Tedarikçi"><div style={S.selRow}><select style={S.sel} value={form.tedarikciId||''} onChange={e=>{const cid=idVal(e.target.value);const c=tedarikciler.find(t=>t.id===cid);setForm(f=>({...f,tedarikciId:cid,faturaId:'',personelId:f.personelId||c?.sorumluId||null}));}}><option value="">— Seçiniz —</option>{tedarikciler.map(t=><option key={t.id} value={t.id}>{t.ad}</option>)}</select><button type="button" style={S.btnAdd} title="Yeni Tedarikçi Ekle" onClick={()=>setHizliEkle('tedarikci')}>＋</button></div></FG>
       )}
+      {(()=>{const c=tab==='tahsilat'?musteriler.find(m=>m.id===form.musteriId):tedarikciler.find(t=>t.id===form.tedarikciId);if(!c)return null;const sorumlu=personel.find(p=>p.id===c.sorumluId);const bk=tab==='tahsilat'?musteriBakiye(c.id,faturalar,hareketler):tedarikciBakiye(c.id,faturalar,hareketler);return(<InfoBox color={C.blue}>{sorumlu?`👤 Sorumlu: ${sorumlu.ad}`:'👤 Sorumlu personel tanımlı değil'} · {tab==='tahsilat'?'Açık Alacak':'Açık Borç'}: <strong>{fmtTL(bk.bakiye)}</strong></InfoBox>);})()}
       <FG label="İlgili Fatura (opsiyonel)"><select style={S.sel} value={form.faturaId||''} onChange={e=>{const fid=idVal(e.target.value);const f=faturalar.find(x=>x.id===fid);setForm(fm=>({...fm,faturaId:fid,tutar:f?faturaKalan(f,hareketler):fm.tutar}));}}><option value="">— Yok / Serbest —</option>{acikFaturalar.map(f=><option key={f.id} value={f.id}>{f.no} — Kalan: {fmtTL(faturaKalan(f,hareketler))}</option>)}</select></FG>
       <FG label="Hesap (Kasa/Banka)"><select style={S.sel} value={form.hesapId||''} onChange={e=>setForm(f=>({...f,hesapId:idVal(e.target.value)}))}><option value="">— Seçiniz —</option>{hesaplar.filter(h=>h.tur==='aktif').map(h=><option key={h.id} value={h.id}>{h.ad}</option>)}</select></FG>
       <FG label="Sorumlu Personel (opsiyonel)"><select style={S.sel} value={form.personelId??''} onChange={e=>setForm(f=>({...f,personelId:idVal(e.target.value)}))}><option value="">— Seçiniz —</option>{personel.map(p=><option key={p.id} value={p.id}>{p.ad}</option>)}</select></FG>
