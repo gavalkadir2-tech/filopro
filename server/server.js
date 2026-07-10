@@ -17,6 +17,8 @@ const bcrypt = require('bcryptjs');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const nodemailer = require('nodemailer');
+const cron = require('node-cron');
 
 const app = express();
 app.use(cors());
@@ -25,6 +27,23 @@ app.use(express.json({ limit: '20mb' }));
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET;
 const GROQ_API_KEY = process.env.GROQ_API_KEY; // opsiyonel: yoksa sadece AI modülü çalışmaz, senkron etkilenmez. Ücretsiz anahtar: console.groq.com
+
+// ── E-posta (SMTP) — opsiyonel: yoksa sadece günlük otomatik yedek e-postası devre dışı kalır ──
+const SMTP_USER = process.env.SMTP_USER;
+const SMTP_PASS = process.env.SMTP_PASS;
+const SMTP_HOST = process.env.SMTP_HOST; // boş bırakılırsa Gmail varsayılır
+const SMTP_PORT = process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : undefined;
+const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER;
+const mailer = (SMTP_USER && SMTP_PASS)
+  ? nodemailer.createTransport(
+      SMTP_HOST
+        ? { host: SMTP_HOST, port: SMTP_PORT || 587, secure: SMTP_PORT === 465, auth: { user: SMTP_USER, pass: SMTP_PASS } }
+        : { service: 'gmail', auth: { user: SMTP_USER, pass: SMTP_PASS } }
+    )
+  : null;
+if (!mailer) {
+  console.warn('UYARI: SMTP_USER/SMTP_PASS tanımlı değil. Günlük otomatik yedek e-postası devre dışı (senkron ve diğer özellikler etkilenmez).');
+}
 
 const DATA_DIR = path.join(__dirname, 'data');
 const TENANTS_DIR = path.join(DATA_DIR, 'tenants');
@@ -68,6 +87,15 @@ function readAiConfig(tenantId) {
 }
 function writeAiConfig(tenantId, cfg) {
   writeJsonAtomic(aiConfigFile(tenantId), cfg);
+}
+function backupConfigFile(tenantId) {
+  return path.join(TENANTS_DIR, `${tenantId}.backup.json`);
+}
+function readBackupConfig(tenantId) {
+  return readJson(backupConfigFile(tenantId), {});
+}
+function writeBackupConfig(tenantId, cfg) {
+  writeJsonAtomic(backupConfigFile(tenantId), cfg);
 }
 function readUsers() {
   return readJson(USERS_FILE, { users: [] }).users;
@@ -283,9 +311,167 @@ app.post('/api/sync/push', authMiddleware, (req, res) => {
   res.json({ applied, rejected, serverTime: Date.now() });
 });
 
+// ── Günlük Otomatik Yedekleme (E-posta) ─────────────────────────────────────────
+// Her şirket (tenant), Ayarlar üzerinden bir "yedek e-posta adresi" tanımlayabilir.
+// Her gece 00:00'da (Europe/Istanbul), o şirketin verisi index.html'in "Yedek Al"
+// özelliğiyle aynı formatta (JSON, modül -> kayıt dizisi) bir dosya haline getirilip
+// bu adrese e-posta ekinde gönderilir. SMTP tanımlı değilse bu özellik sessizce
+// devre dışı kalır; senkron ve diğer özellikler etkilenmez.
+
+// tenant store'undaki kayıt bazlı yapıyı ({module: {recordId: {data, deleted}}}),
+// index.html'in "Yedek Al" / "Geri Yükle" ile kullandığı düz formata çevirir:
+// { [module]: [data, data, ...], ayarlar: {...} }
+function tenantBackupJson(tenantId) {
+  const store = readTenantStore(tenantId);
+  const out = {};
+  Object.keys(store.records || {}).forEach((mod) => {
+    const kayitlar = Object.values(store.records[mod] || {})
+      .filter((item) => item && !item.deleted)
+      .map((item) => item.data);
+    if (kayitlar.length) out[mod] = kayitlar;
+  });
+  if (store.settings && store.settings.data !== undefined) out.ayarlar = store.settings.data;
+  return out;
+}
+
+function listTenants() {
+  const users = readUsers();
+  const map = new Map();
+  users.forEach((u) => {
+    if (!map.has(u.tenantId)) map.set(u.tenantId, u.companyName || u.tenantId);
+  });
+  return Array.from(map.entries()).map(([tenantId, companyName]) => ({ tenantId, companyName }));
+}
+
+async function sendBackupEmail(tenantId, companyName, toEmail) {
+  if (!mailer) throw new Error('SMTP yapılandırılmamış (.env dosyasında SMTP_USER/SMTP_PASS eksik).');
+  const backup = tenantBackupJson(tenantId);
+  const tarih = new Date().toISOString().slice(0, 10);
+  const dosyaAdi = `filopro-yedek-${tarih}.json`;
+  const kayitSayisi = Object.keys(backup).reduce((s, k) => s + (Array.isArray(backup[k]) ? backup[k].length : 0), 0);
+  await mailer.sendMail({
+    from: SMTP_FROM,
+    to: toEmail,
+    subject: `FiloPro Günlük Yedek — ${companyName || tenantId} — ${tarih}`,
+    text: `Merhaba,\n\n${companyName || 'Şirketiniz'} için ${tarih} tarihli otomatik FiloPro veri yedeği ektedir (${kayitSayisi} kayıt).\n\nBu dosyayı FiloPro > Ayarlar > Veri Yönetimi > Geri Yükleme bölümünden geri yükleyebilirsiniz.\n\nBu e-posta otomatik olarak gönderilmiştir.`,
+    attachments: [{ filename: dosyaAdi, content: JSON.stringify(backup, null, 2), contentType: 'application/json' }],
+  });
+}
+
+// Mevcut yedek e-postası ayarını döner (yönetici olmayan kullanıcılar da görebilir, sadece değiştiremez).
+app.get('/api/backup/config', authMiddleware, (req, res) => {
+  const cfg = readBackupConfig(req.user.tenantId);
+  res.json({ email: cfg.email || '', enabled: !!cfg.email, smtpConfigured: !!mailer, lastSentAt: cfg.lastSentAt || null, lastError: cfg.lastError || null });
+});
+
+// Yedek e-postası adresini kaydeder/kaldırır (sadece yönetici).
+app.post('/api/backup/config', authMiddleware, adminOnly, (req, res) => {
+  const { email } = req.body || {};
+  const cfg = readBackupConfig(req.user.tenantId);
+  if (email === '' || email === null) {
+    delete cfg.email;
+  } else {
+    if (typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'Geçerli bir e-posta adresi girin.' });
+    }
+    cfg.email = email.trim();
+  }
+  writeBackupConfig(req.user.tenantId, cfg);
+  res.json({ ok: true, email: cfg.email || '', smtpConfigured: !!mailer });
+});
+
+// Beklemeden hemen bir test yedeği gönderir (sadece yönetici).
+app.post('/api/backup/send-now', authMiddleware, adminOnly, async (req, res) => {
+  const cfg = readBackupConfig(req.user.tenantId);
+  const hedef = (req.body && req.body.email) || cfg.email;
+  if (!hedef) return res.status(400).json({ error: 'Önce bir yedek e-posta adresi kaydedin.' });
+  if (!mailer) return res.status(503).json({ error: 'Sunucuda SMTP yapılandırılmamış. .env dosyasına SMTP_USER/SMTP_PASS ekleyip sunucuyu yeniden başlatın.' });
+  const users = readUsers();
+  const requester = users.find((u) => u.username === req.user.sub);
+  try {
+    await sendBackupEmail(req.user.tenantId, requester?.companyName, hedef);
+    cfg.lastSentAt = Date.now();
+    cfg.lastError = null;
+    writeBackupConfig(req.user.tenantId, cfg);
+    res.json({ ok: true, sentTo: hedef });
+  } catch (e) {
+    cfg.lastError = e.message;
+    writeBackupConfig(req.user.tenantId, cfg);
+    res.status(502).json({ error: 'E-posta gönderilemedi: ' + e.message });
+  }
+});
+
+// Bugün için zaten gönderilmiş mi kontrol eder (aynı gün içinde iç zamanlayıcı VE
+// dış tetikleyici aynı anda çalışırsa, aynı şirkete iki kez e-posta gitmesini önler).
+function bugunGonderildiMi(cfg) {
+  if (!cfg.lastSentAt) return false;
+  const gonderilenGun = new Date(cfg.lastSentAt).toLocaleDateString('en-CA', { timeZone: 'Europe/Istanbul' });
+  const bugun = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Istanbul' });
+  return gonderilenGun === bugun;
+}
+
+// Yedek e-postası tanımlı olan her şirkete (henüz bugün gönderilmediyse) yedek gönderir.
+// Hem iç zamanlayıcı (cron.schedule) hem de dış tetikleyici uç noktası bunu çağırır.
+async function runDailyBackups(kaynak) {
+  const tenants = listTenants();
+  console.log(`[Yedek] Günlük otomatik yedekleme başladı (${kaynak}) — ${tenants.length} şirket kontrol ediliyor.`);
+  let gonderildi = 0;
+  let atlandi = 0;
+  for (const t of tenants) {
+    const cfg = readBackupConfig(t.tenantId);
+    if (!cfg.email) continue;
+    if (bugunGonderildiMi(cfg)) { atlandi++; continue; }
+    try {
+      await sendBackupEmail(t.tenantId, t.companyName, cfg.email);
+      cfg.lastSentAt = Date.now();
+      cfg.lastError = null;
+      gonderildi++;
+      console.log(`[Yedek] ${t.companyName} (${t.tenantId}) → ${cfg.email} gönderildi.`);
+    } catch (e) {
+      cfg.lastError = e.message;
+      console.error(`[Yedek] ${t.companyName} (${t.tenantId}) HATA: ${e.message}`);
+    }
+    writeBackupConfig(t.tenantId, cfg);
+  }
+  console.log(`[Yedek] Tamamlandı (${kaynak}) — gönderilen: ${gonderildi}, bugün zaten gönderilmiş olup atlanan: ${atlandi}.`);
+  return { gonderildi, atlandi };
+}
+
+// Her gece 00:00 (Europe/Istanbul) — sunucu SÜREKLİ AÇIKSA (ücretli/always-on plan)
+// bu iç zamanlayıcı yeterlidir. Render'ın ÜCRETSİZ planında servis uykuya
+// geçebileceğinden bu tek başına güvenilir DEĞİLDİR; aşağıdaki dış tetikleyici
+// uç noktasını (README'deki cron-job.org talimatına göre) mutlaka kurun.
+if (mailer) {
+  cron.schedule('0 0 * * *', () => runDailyBackups('iç zamanlayıcı'), { timezone: 'Europe/Istanbul' });
+  console.log('Günlük otomatik yedek e-postası iç zamanlayıcısı aktif (her gece 00:00, Europe/Istanbul).');
+}
+
+// Dış bir zamanlayıcı servisinin (ör. cron-job.org, ücretsiz) her gece çağırması
+// için uç nokta. Render'ın ücretsiz planında güvenilir tetikleme YALNIZCA bu
+// yoldan sağlanır: dış istek, uyuyan servisi otomatik uyandırır. BACKUP_CRON_SECRET
+// ile korunur; bilmeyen biri rastgele tetikleyip e-posta gönderemesin diye.
+const BACKUP_CRON_SECRET = process.env.BACKUP_CRON_SECRET;
+app.get('/api/backup/run-daily', async (req, res) => {
+  if (!BACKUP_CRON_SECRET) {
+    return res.status(503).json({ error: 'BACKUP_CRON_SECRET .env dosyasında tanımlı değil, bu uç nokta kapalı.' });
+  }
+  if (req.query.secret !== BACKUP_CRON_SECRET) {
+    return res.status(401).json({ error: 'Geçersiz secret.' });
+  }
+  if (!mailer) {
+    return res.status(503).json({ error: 'SMTP yapılandırılmamış.' });
+  }
+  try {
+    const sonuc = await runDailyBackups('dış tetikleyici');
+    res.json({ ok: true, ...sonuc });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // ── Yapay Zeka Vekili (Proxy) ────────────────────────────────────────────────
 // FiloPro'nun AI Asistan modülü, API anahtarını tarayıcıda gizli tutamayacağı
+
 // için bu uca istek atar; anahtar sadece burada, sunucuda kalır. Her şirket
 // (tenant) kendi Groq API anahtarını Ayarlar ekranından girebilir; girilmezse
 // sunucudaki ortak GROQ_API_KEY (varsa) yedek olarak kullanılır.
