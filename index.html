@@ -447,6 +447,37 @@ async function fpAiRemoveConfig(){
   return data;
 }
 
+async function fpBackupGetConfig(){
+  const cfg=getSyncCfg();
+  if(!cfg.token||!cfg.url)throw new Error('Önce sunucuya bağlanmalısınız.');
+  const res=await fetch(`${cfg.url}/api/backup/config`,{headers:{'Authorization':`Bearer ${cfg.token}`}});
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(data.error||'Yedek ayarları alınamadı.');
+  return data;
+}
+
+async function fpBackupSaveConfig(email){
+  const cfg=getSyncCfg();
+  if(!cfg.token||!cfg.url)throw new Error('Önce sunucuya bağlanmalısınız.');
+  const res=await fetch(`${cfg.url}/api/backup/config`,{
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':`Bearer ${cfg.token}`},
+    body:JSON.stringify({email})
+  });
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(data.error||'Yedek ayarları kaydedilemedi.');
+  return data;
+}
+
+async function fpBackupSendNow(){
+  const cfg=getSyncCfg();
+  if(!cfg.token||!cfg.url)throw new Error('Önce sunucuya bağlanmalısınız.');
+  const res=await fetch(`${cfg.url}/api/backup/send-now`,{method:'POST',headers:{'Authorization':`Bearer ${cfg.token}`}});
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(data.error||'Test yedeği gönderilemedi.');
+  return data;
+}
+
 function fpSyncLogout(){
   setSyncCfg({});
   setSyncMeta({});
@@ -2408,7 +2439,29 @@ function IsEmirleri(){
     const eslesen=araclar.filter(a=>anahtarlar.some(k=>(a.tip||'').toLocaleLowerCase('tr-TR').includes(k)));
     return eslesen.length?eslesen:araclar;
   };
-  const isEmriMesaji=(i)=>{const a=araclar.find(x=>x.id===i.aracId);return `📌 İş Emri: ${i.baslik}\n${i.aciklama?`Açıklama: ${i.aciklama}\n`:''}Araç: ${a?.ad||'—'}\nCari: ${cariAdi(i)}\nÖncelik: ${oncLabel[i.oncelik]||i.oncelik}\n${i.olayYeri?`Yer: ${i.olayYeri}\n`:''}${i.bitis?`Bitiş: ${fmtDate(i.bitis)}`:''}`;};
+  const isEmriMesaji=(i)=>{
+    const a=araclar.find(x=>x.id===i.aracId);
+    const c=cariById(i.cariId);
+    const cTel=cariTel(i.cariId);
+    const turAdi=servisIdSet.has(i.tur)?servisLabelMap[i.tur]:'Genel İş Emri';
+    const sebepLabel=SERVIS_SEBEP_LABEL[i.tur]?.[i.servisSebep];
+    const satirlar=[
+      `📌 İş Emri: ${i.baslik}`,
+      `Öncelik: ${oncLabel[i.oncelik]||i.oncelik||'—'}`,
+      `İş Türü: ${turAdi}`,
+      c?`Cari: ${c.ad}${cTel?` — 📞 ${cTel}`:''} (${i.cariTipi==='tedarikci'?'Tedarikçi':'Müşteri'})`:null,
+      a?`Hizmet Aracı: ${a.ad}${a.plaka?` — ${a.plaka}`:''}`:null,
+      i.fisNo?`Fiş No: ${i.fisNo}`:null,
+      sebepLabel?`Talep Detayı/Sebebi: ${sebepLabel}`:null,
+      i.talepSaati?`Talep Saati: ${i.talepSaati}`:null,
+      i.olayYeri?`Olay Yeri / Hizmet Adresi: ${i.olayYeri}`:null,
+      i.hedefYer?`Hedef Yer: ${i.hedefYer}`:null,
+      (i.musteriPlaka||i.musteriAracModel)?`Müşteri Aracı/Ekipmanı: ${i.musteriPlaka||'—'}${i.musteriAracModel?` — ${i.musteriAracModel}`:''}`:null,
+      i.bitis?`Bitiş: ${fmtDate(i.bitis)}`:null,
+      i.aciklama?`Açıklama: ${i.aciklama}`:null,
+    ].filter(Boolean);
+    return satirlar.join('\n');
+  };
   const isEmriWaLink=(i)=>{const per=personel.find(p=>p.id===i.opId);return per?.tel?whatsappLinkOlustur(per.tel,isEmriMesaji(i)):null;};
   const otoBaslik=(f)=>{
     if(servisIdSet.has(f.tur)){
@@ -3809,9 +3862,91 @@ function YapayZekaAyarlari(){
   );
 }
 
+function YedekEmailAyarlari(){
+  const cfg=getSyncCfg();
+  const [ayar,setAyar]=useState(null);
+  const [yukleniyor,setYukleniyor]=useState(true);
+  const [email,setEmail]=useState('');
+  const [kaydediliyor,setKaydediliyor]=useState(false);
+  const [gonderiliyor,setGonderiliyor]=useState(false);
+  const [hata,setHata]=useState('');
+
+  const yukle=async()=>{
+    setYukleniyor(true);
+    try{
+      const d=await fpBackupGetConfig();
+      setAyar(d);
+      setEmail(d.email||'');
+    }catch(e){fpToast(e.message,'error');}
+    finally{setYukleniyor(false);}
+  };
+  useEffect(()=>{yukle();},[]);
+
+  const kaydet=async(e)=>{
+    e.preventDefault();
+    setHata('');setKaydediliyor(true);
+    try{
+      await fpBackupSaveConfig(email.trim());
+      fpToast('✅ Yedek e-postası ayarı kaydedildi.');
+      yukle();
+    }catch(err){
+      setHata(err.message||'Kaydedilemedi.');
+    }finally{
+      setKaydediliyor(false);
+    }
+  };
+
+  const kaldir=async()=>{
+    if(!(await fpConfirm('Günlük otomatik yedek e-postası kapatılsın mı?')))return;
+    try{await fpBackupSaveConfig('');fpToast('Kapatıldı.');setEmail('');yukle();}catch(e){fpToast(e.message,'error');}
+  };
+
+  const testGonder=async()=>{
+    setGonderiliyor(true);
+    try{
+      const d=await fpBackupSendNow();
+      fpToast(`✅ Test yedeği ${d.sentTo} adresine gönderildi.`);
+      yukle();
+    }catch(e){fpToast(e.message,'error');}
+    finally{setGonderiliyor(false);}
+  };
+
+  if(cfg.role!=='admin'){
+    return <InfoBox color={C.blue}>ℹ️ Yedek e-postası ayarlarını görmek ve değiştirmek için yönetici (admin) hesabıyla giriş yapmış olmanız gerekir.</InfoBox>;
+  }
+  if(yukleniyor)return <div style={{...S.card,marginTop:16,fontSize:13,color:C.muted}}>Yükleniyor…</div>;
+
+  return (
+    <div style={{...S.card,marginTop:16}}>
+      <div style={S.secTitle}>📧 Günlük Otomatik Yedek E-postası</div>
+      <div style={{fontSize:13,color:C.muted,marginBottom:16,lineHeight:1.6}}>Buraya girilen adrese, her gece <b>00:00'da</b> tüm FiloPro verinizin bir JSON yedeği otomatik olarak e-posta ekiyle gönderilir. Bu dosyayı Veri Yönetimi &gt; Geri Yükleme'den tekrar içe aktarabilirsiniz.</div>
+
+      {!ayar?.smtpConfigured&&<InfoBox color={C.yellow}>⚠️ Sunucuda e-posta gönderimi (SMTP) henüz yapılandırılmamış. Bu ayarı kaydedebilirsiniz ama sunucu tarafında <code>.env</code> dosyasına SMTP_USER/SMTP_PASS eklenip sunucu yeniden başlatılana kadar e-posta gönderilmez.</InfoBox>}
+
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16,flexWrap:'wrap'}}>
+        <span style={S.badge(ayar?.enabled?C.green:C.muted)}>{ayar?.enabled?'✓ Aktif':'Kapalı'}</span>
+        {ayar?.lastSentAt&&<span style={{fontSize:12,color:C.muted}}>Son gönderim: {new Date(ayar.lastSentAt).toLocaleString('tr-TR')}</span>}
+        {ayar?.lastError&&<span style={{fontSize:12,color:C.red}}>Son hata: {ayar.lastError}</span>}
+      </div>
+
+      <form onSubmit={kaydet}>
+        <FG label="Yedek E-posta Adresi">
+          <input type="email" style={S.inp} placeholder="ornek@sirketiniz.com" value={email} onChange={e=>setEmail(e.target.value)}/>
+        </FG>
+        {hata&&<div style={{...S.alert(C.red),marginBottom:12}}>⚠️ {hata}</div>}
+        <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
+          <button type="submit" style={S.btn()} disabled={kaydediliyor}>{kaydediliyor?'⏳ Kaydediliyor...':'💾 Kaydet'}</button>
+          {ayar?.enabled&&<button type="button" style={S.btnO} onClick={testGonder} disabled={gonderiliyor}>{gonderiliyor?'⏳ Gönderiliyor...':'📤 Şimdi Test Yedeği Gönder'}</button>}
+          {ayar?.enabled&&<button type="button" style={S.btnR} onClick={kaldir}>🗑 Kapat</button>}
+        </div>
+      </form>
+    </div>
+  );
+}
+
+
 function SenkronPaneli(){
   const cfg=getSyncCfg();
-  const [status,setStatus]=useState(fpSyncStatus());
   const [mod,setMod]=useState('giris'); // 'giris' | 'kayit'
   const [url,setUrl]=useState(cfg.url||'');
   const [firma,setFirma]=useState('');
@@ -3889,6 +4024,7 @@ function SenkronPaneli(){
       </div>
       {bagli&&<EkipYonetimi/>}
       {bagli&&<YapayZekaAyarlari/>}
+      {bagli&&<YedekEmailAyarlari/>}
       <InfoBox color={C.blue}>ℹ️ Senkronizasyon için ayrıca bir FiloPro Sync sunucusu kurulu olmalıdır (backend deposundaki server klasörüne bakın). Her şirket kendi izole verisine sahiptir; şu anki sürümde eşzamanlı çakışan değişikliklerde en son kaydeden kazanır (son yazan üzerine yazar).</InfoBox>
     </div>
   );
