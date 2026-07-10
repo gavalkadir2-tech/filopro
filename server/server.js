@@ -216,41 +216,73 @@ app.delete('/api/users/:username', authMiddleware, adminOnly, (req, res) => {
 });
 
 // ── Senkronizasyon (şirket bazında izole) ────────────────────────────────────────
+// Depolama şekli: tenant store'u iki bölümden oluşur:
+//   store.records = { [modul]: { [kayitId]: {data, updatedAt, deleted:0|1} } }
+//   store.settings = {data, updatedAt} | undefined
+// Bu, istemcinin (index.html) LS.set() üzerinden ürettiği kayıt bazlı (satır satır)
+// delta senkron formatıyla birebir eşleşir — istemci her tabloyu değil, sadece
+// değişen/silinen satırları gönderir ve alır.
 app.get('/api/sync/pull', authMiddleware, (req, res) => {
   const since = parseInt(req.query.since || '0', 10) || 0;
   const store = readTenantStore(req.user.tenantId);
-  const changed = {};
-  Object.keys(store).forEach((key) => {
-    const entry = store[key];
-    if (entry && entry.updatedAt > since) {
-      changed[key] = { data: entry.data, updatedAt: entry.updatedAt };
-    }
+  const changedRecords = [];
+  Object.keys(store.records || {}).forEach((mod) => {
+    Object.keys(store.records[mod] || {}).forEach((recId) => {
+      const item = store.records[mod][recId];
+      if (item && item.updatedAt > since) {
+        changedRecords.push({
+          module: mod,
+          recordId: recId,
+          data: item.data,
+          updatedAt: item.updatedAt,
+          deleted: item.deleted || 0,
+        });
+      }
+    });
   });
-  res.json({ changed, serverTime: Date.now() });
+  const changedSettings = (store.settings && store.settings.updatedAt > since) ? store.settings : null;
+  res.json({ changedRecords, changedSettings, serverTime: Date.now() });
 });
 
 // "Son yazan kazanır" (last-write-wins): gelen kaydın updatedAt'i sunucudakinden
-// yeni veya eşitse uygulanır. Kayıt bazlı değil, tablo (modül) bazlıdır.
+// yeni veya eşitse uygulanır. Kayıt (satır) bazlıdır — modül+kayıt id'sine göre.
 app.post('/api/sync/push', authMiddleware, (req, res) => {
-  const { changes } = req.body || {};
-  if (!Array.isArray(changes)) return res.status(400).json({ error: 'changes dizisi gerekli.' });
+  const { changes, settingsChange } = req.body || {};
   const store = readTenantStore(req.user.tenantId);
+  store.records = store.records || {};
   let applied = 0;
   let rejected = 0;
   const now = Date.now();
-  changes.forEach((ch) => {
-    if (!ch || !ch.key) return;
-    const existing = store[ch.key];
-    if (!existing || (ch.updatedAt || 0) >= existing.updatedAt) {
-      store[ch.key] = { data: ch.data, updatedAt: ch.updatedAt || now };
+
+  if (Array.isArray(changes)) {
+    changes.forEach((ch) => {
+      if (!ch || !ch.module || ch.recordId === undefined || ch.recordId === null) return;
+      store.records[ch.module] = store.records[ch.module] || {};
+      const existing = store.records[ch.module][ch.recordId];
+      const updatedAt = ch.updatedAt || now;
+      if (!existing || updatedAt >= existing.updatedAt) {
+        store.records[ch.module][ch.recordId] = { data: ch.data, updatedAt, deleted: ch.deleted ? 1 : 0 };
+        applied++;
+      } else {
+        rejected++;
+      }
+    });
+  }
+
+  if (settingsChange && settingsChange.data !== undefined) {
+    const updatedAt = settingsChange.updatedAt || now;
+    if (!store.settings || updatedAt >= store.settings.updatedAt) {
+      store.settings = { data: settingsChange.data, updatedAt };
       applied++;
     } else {
       rejected++;
     }
-  });
+  }
+
   writeTenantStore(req.user.tenantId, store);
   res.json({ applied, rejected, serverTime: Date.now() });
 });
+
 
 // ── Yapay Zeka Vekili (Proxy) ────────────────────────────────────────────────
 // FiloPro'nun AI Asistan modülü, API anahtarını tarayıcıda gizli tutamayacağı

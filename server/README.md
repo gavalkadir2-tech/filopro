@@ -90,8 +90,9 @@ diğer tüm özellikler normal şekilde çalışmaya devam eder.
 - Şifreler bcrypt ile hash'lenir, asla düz metin saklanmaz.
 - Kullanıcı adları **platform genelinde benzersizdir** (iki farklı şirket aynı
   kullanıcı adını kullanamaz).
-- Çakışma çözümü "son yazan kazanır" (last-write-wins) — tablo bazında, kayıt
-  bazında değil. Aynı şirketteki iki kullanıcı aynı modülü aynı anda çevrimdışı
-  düzenleyip senkronize ederse, en son senkronize edilen değişiklik geçerli
-  olur. Küçük ekipler için pratikte yeterlidir.
+- Çakışma çözümü "son yazan kazanır" (last-write-wins) — **kayıt (satır) bazındadır**,
+  tablo bazında değil. Aynı şirketteki iki kullanıcı aynı modülün *farklı*
+  kayıtlarını aynı anda çevrimdışı düzenleyip senkronize ederse, ikisi de
+  korunur (birbirini ezmez); yalnızca aynı kaydı aynı anda düzenlerlerse en
+  son senkronize edilen kazanır. Küçük ekipler için pratikte gayet güvenlidir.
 - `data/` klasörü düzenli yedeklenmeye değerdir.
