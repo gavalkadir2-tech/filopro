@@ -633,7 +633,7 @@ const DEFAULT_SETTINGS={
   // ── Muhasebe Kategori Listeleri (düzenlenebilir) ───────────────────────────
   gelirKategorileri:['Hizmet Bedeli','Kira Geliri','Satış Geliri','Diğer Gelir'],
   giderKategorileri:['Yakıt','Personel','Bakım-Onarım','Sigorta','Kira','Vergi/SGK','Ofis Gideri','Yedek Parça','Diğer Gider'],
-  sahaServisTipleri:[{id:'kurtarici',icon:'🚨',label:'Kurtarıcı'},{id:'vinc',icon:'🏗️',label:'Vinç'},{id:'vidanjor',icon:'🚛',label:'Vidanjör'},{id:'nakliye',icon:'🚚',label:'Nakliye'}],
+  sahaServisTipleri:[{id:'kurtarici',icon:'🚨',label:'Kurtarıcı'},{id:'vinc',icon:'🏗️',label:'Vinç'},{id:'vidanjor',icon:'🚛',label:'Vidanjör'},{id:'nakliye',icon:'🚚',label:'Nakliye'},{id:'forklift',icon:'🏭',label:'Forklift'},{id:'menlift',icon:'🪜',label:'Menlift'}],
   // ── Fatura Numaralandırma & Vade ───────────────────────────────────────────
   faturaKesilenOnEk:'F', faturaAlinanOnEk:'AF', faturaBaslangicSayaci:1, faturaVadeGunuVarsayilan:30,
   // ── Bakım Hatırlatması: Çalışma Saati / Km Bazlı Eşik (gün bazlı eşiklere ek) ──
@@ -882,8 +882,8 @@ const exportXLSX=(headers,rows,filename,sheetName='Sayfa1')=>{
 };
 const FATURA_DURUM_LABEL={odendi:'Ödendi',kismiOdendi:'Kısmi Ödendi',vadesiGecti:'Vadesi Geçti',bekliyor:'Bekliyor'};
 const FATURA_DURUM_RENK={odendi:'#22c55e',vadesiGecti:'#ef4444',kismiOdendi:'#f97316',bekliyor:'#eab308'};
-const faturaSatirlari=(zengin)=>zengin.map(f=>[f.no,cariAd(f),fmtDate(f.tarih),fmtDate(f.vadeTarih),+f.tutar||0,+f.kdv||0,+f.toplam||0,+f.kalan||0,FATURA_DURUM_LABEL[f.durum]||f.durum]);
-const FATURA_BASLIKLAR=['Fatura No','Cari','Fatura Tarihi','Vade Tarihi','Tutar','KDV','Toplam','Kalan','Durum'];
+const faturaSatirlari=(zengin)=>zengin.map(f=>{const c=cariById(f.tur==='kesilen'?f.musteriId:f.tedarikciId);return[f.no,cariAd(f),c?.vergiNo||'',c?.vergiDaire||'',fmtDate(f.tarih),fmtDate(f.vadeTarih),+f.tutar||0,+f.kdv||0,+f.toplam||0,+f.kalan||0,FATURA_DURUM_LABEL[f.durum]||f.durum];});
+const FATURA_BASLIKLAR=['Fatura No','Cari Unvan','VKN/TCKN','Vergi Dairesi','Fatura Tarihi','Vade Tarihi','Matrah (Tutar)','KDV','Genel Toplam','Kalan','Durum'];
 
 // Pop-up engelleyicilerden etkilenmeyen, gizli iframe üzerinden yazdırma
 const printHTMLDoc=(html)=>{
@@ -1244,6 +1244,16 @@ function migrateCariBirlestir(){
   localStorage.removeItem('musteriler');
   localStorage.removeItem('tedarikciler');
   localStorage.setItem('fp_cari_migration','1');
+}
+
+// ── Geçiş: Forklift ve Menlift saha servis tiplerini mevcut ayarlara ekler ─────
+function migrateSahaServisTipleriEkle(){
+  if(localStorage.getItem('fp_saha_servis_v2'))return;
+  const s=getSettings();
+  const mevcut=Array.isArray(s.sahaServisTipleri)?s.sahaServisTipleri:[];
+  const eksikler=[{id:'forklift',icon:'🏭',label:'Forklift'},{id:'menlift',icon:'🪜',label:'Menlift'}].filter(e=>!mevcut.some(m=>m.id===e.id));
+  if(eksikler.length)saveSettings({...s,sahaServisTipleri:[...mevcut,...eksikler]});
+  localStorage.setItem('fp_saha_servis_v2','1');
 }
 
 // ── Ortak Uyarı Hesaplama (Dashboard + Bildirim Zili) ─────────────────────────
@@ -2382,25 +2392,43 @@ const SERVIS_SEBEP_LABEL={
 function IsEmirleri(){
   const araclar=LS.get('araclar'),personel=LS.get('personel');
   const servisTipleri=SAHA_SERVIS_TIPLERI(),servisIdSet=SAHA_SERVIS_ID_SET(),servisLabelMap=SERVIS_TIP_LABEL();
-  const [musteriler,setMusteriler]=useState(LS.get('cariler').filter(c=>(c.tipler||[]).includes('musteri'))),[tedarikciler,setTedarikciler]=useState(LS.get('cariler').filter(c=>(c.tipler||[]).includes('tedarikci')));
+  const [cariler,setCariler]=useState(LS.get('cariler'));
   const [isler,setIsler]=useState(LS.get('isemirleri')),[modal,setModal]=useState(false),[form,setForm]=useState({}),[err,setErr]=useState('');
   const [hizliEkle,setHizliEkle]=useState(false);
   const [turFiltre,setTurFiltre]=useState('tumu');
   const [bildirimSonuc,setBildirimSonuc]=useState(null);
   const [bildirimGonderiliyor,setBildirimGonderiliyor]=useState(false);
   const cariAdi=(i)=>i.cariTipi==='tedarikci'?tedarikciAd(i.cariId):musteriAd(i.cariId);
+  const SERVIS_ARAC_ANAHTAR={kurtarici:['kurtarıcı'],nakliye:['nakliye','kamyon','tır','römork','treyler'],menlift:['menlift','personel yükseltici','platform']};
+  const araclarFiltreli=(tur)=>{
+    if(!tur||tur==='genel')return araclar;
+    const servis=servisTipleri.find(([k])=>k===tur);
+    if(!servis)return araclar;
+    const anahtarlar=[servis[2].toLocaleLowerCase('tr-TR'),...(SERVIS_ARAC_ANAHTAR[tur]||[])];
+    const eslesen=araclar.filter(a=>anahtarlar.some(k=>(a.tip||'').toLocaleLowerCase('tr-TR').includes(k)));
+    return eslesen.length?eslesen:araclar;
+  };
+  const isEmriMesaji=(i)=>{const a=araclar.find(x=>x.id===i.aracId);return `📌 İş Emri: ${i.baslik}\n${i.aciklama?`Açıklama: ${i.aciklama}\n`:''}Araç: ${a?.ad||'—'}\nCari: ${cariAdi(i)}\nÖncelik: ${oncLabel[i.oncelik]||i.oncelik}\n${i.olayYeri?`Yer: ${i.olayYeri}\n`:''}${i.bitis?`Bitiş: ${fmtDate(i.bitis)}`:''}`;};
+  const isEmriWaLink=(i)=>{const per=personel.find(p=>p.id===i.opId);return per?.tel?whatsappLinkOlustur(per.tel,isEmriMesaji(i)):null;};
+  const otoBaslik=(f)=>{
+    if(servisIdSet.has(f.tur)){
+      const sebepLabel=SERVIS_SEBEP_LABEL[f.tur]?.[f.servisSebep];
+      return `${servisLabelMap[f.tur]}${sebepLabel?` — ${sebepLabel}`:''}`;
+    }
+    return 'Genel İş Emri';
+  };
   const save=()=>{
     const hata=validate(form,{
-      baslik:[f=>!!f.baslik?.trim(),'Yapılacak iş (başlık) zorunludur.'],
-      cariId:[f=>!!(f.cariTipi&&f.cariId),'Müşteri veya tedarikçi seçimi zorunludur.'],
+      cariId:[f=>!!(f.cariTipi&&f.cariId),'Cari (müşteri/tedarikçi) seçimi zorunludur.'],
       aracId:[f=>!!f.aracId,'Araç seçimi zorunludur.'],
       opId:[f=>!!f.opId,'Sorumlu personel/şoför seçimi zorunludur.'],
       olayYeri:[f=>!servisIdSet.has(f.tur)||!!f.olayYeri?.trim(),'Olay yeri / hizmet adresi zorunludur.'],
     });
     if(hata){setErr(hata);return;}
     setErr('');
-    const yeniKayit=form.id?null:{...form,id:uid(),durum:form.durum||'acik'};
-    const n=form.id?isler.map(i=>i.id===form.id?form:i):[...isler,yeniKayit];LS.set('isemirleri',n);setIsler(n);setModal(false);
+    const formNihai={...form,baslik:otoBaslik(form)};
+    const yeniKayit=form.id?null:{...formNihai,id:uid(),durum:form.durum||'acik'};
+    const n=form.id?isler.map(i=>i.id===form.id?formNihai:i):[...isler,yeniKayit];LS.set('isemirleri',n);setIsler(n);setModal(false);
     if(yeniKayit&&getSettings().bildirimOtomatikGonder){
       setBildirimGonderiliyor(true);
       isEmriBildirimGonder(yeniKayit,personel).then(sonuc=>{setBildirimSonuc(sonuc);setBildirimGonderiliyor(false);});
@@ -2451,18 +2479,16 @@ function IsEmirleri(){
       <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{[['tumu','Tümü'],['genel','📌 Genel'],...servisTipleri.map(([k,icon,l])=>[k,`${icon} ${l}`])].map(([k,l])=>(<button key={k} style={{...S.btn(turFiltre===k?C.accent:'transparent'),border:`1px solid ${turFiltre===k?C.accent:C.border}`,color:turFiltre===k?'#000':C.muted,fontSize:12}} onClick={()=>setTurFiltre(k)}>{l} ({k==='tumu'?isler.length:isler.filter(i=>(i.tur||'genel')===k).length})</button>))}</div>
       <div style={{display:'flex',gap:8}}>
         <ExportMenu headers={['İş Türü','Yapılacak İş','Cari','Araç','Sorumlu Personel','Olay Yeri','Müşteri Aracı (Plaka)','Fiş No','Tutar','Öncelik','Durum','Bitiş Tarihi','Açıklama']} rows={disaAktarSatirlar} filename="filopro-isemirleri" sheetName="İş Emirleri"/>
-        <button style={S.btnO} onClick={()=>{setForm({tarih:today(),talepSaati:nowTime(),oncelik:'kritik',cariTipi:'musteri',tur:'kurtarici'});setErr('');setModal(true);}}>🚨 Saha Hizmeti Talebi</button>
-        <button style={S.btn()} onClick={()=>{setForm({tarih:today(),oncelik:'normal',cariTipi:'musteri',tur:'genel'});setErr('');setModal(true);}}>＋ İş Emri Oluştur</button>
+        <button style={S.btnO} onClick={()=>{setForm({tarih:today(),talepSaati:nowTime(),oncelik:'kritik',tur:'kurtarici',olayYeri:'Akhisar',hedefYer:'Akhisar'});setErr('');setModal(true);}}>🚨 Saha Hizmeti Talebi</button>
+        <button style={S.btn()} onClick={()=>{setForm({tarih:today(),oncelik:'normal',tur:'genel',olayYeri:'Akhisar',hedefYer:'Akhisar'});setErr('');setModal(true);}}>＋ İş Emri Oluştur</button>
       </div>
     </div>
     <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(240px,1fr))',gap:16}}>
       {kolonlar.map(([durum,label,renk])=>(<div key={durum}><div style={{...S.secTitle,color:renk,marginBottom:12}}>{label} ({islerFiltreli.filter(i=>i.durum===durum).length})</div>
-      {islerFiltreli.filter(i=>i.durum===durum).map(i=>{const a=araclar.find(x=>x.id===i.aracId),per=personel.find(x=>x.id===i.opId);const sahaServisi=servisIdSet.has(i.tur);const servisIcon=servisTipleri.find(([k])=>k===i.tur)?.[1]||'🚨';return(<div key={i.id} style={{...S.card,marginBottom:10,borderLeft:`3px solid ${sahaServisi?C.red:oncRenk[i.oncelik]}`,cursor:'pointer'}} onClick={()=>{setForm(i);setErr('');setModal(true);}}><div style={{fontWeight:700,color:C.white,fontSize:13}}>{sahaServisi&&`${servisIcon} `}{i.baslik}</div><div style={{fontSize:11,color:C.accent,marginTop:4}}>{i.cariTipi==='tedarikci'?'🏭':'🧾'} {cariAdi(i)}</div><div style={{fontSize:11,color:C.muted,marginTop:4}}>{a?.ad||'—'}{per?` · 🧑‍💼 ${per.ad}`:''}</div>{sahaServisi&&i.olayYeri&&<div style={{fontSize:11,color:C.red,marginTop:2}}>📍 {i.olayYeri}</div>}{sahaServisi&&i.musteriPlaka&&<div style={{fontSize:11,color:C.muted,marginTop:2}}>🚗 {i.musteriPlaka}{i.musteriAracModel?` · ${i.musteriAracModel}`:''}</div>}{i.fisNo&&<div style={{fontSize:11,color:C.muted,marginTop:2}}>🧾 Fiş No: {i.fisNo}</div>}{+i.tutar>0&&<div style={{fontSize:11,color:C.text,marginTop:2}}>💰 {fmtTL(i.tutar)}</div>}<div style={{fontSize:11,color:C.muted,marginTop:4}}>📅 {fmtDate(i.bitis)}</div>{i.faturaId&&<div style={{fontSize:11,color:C.green,marginTop:4}}>✅ Faturalandı</div>}{(i.evraklar||[]).length>0&&<div style={{fontSize:11,color:C.blue,marginTop:4}}>📎 {i.evraklar.length} evrak</div>}<div style={{display:'flex',gap:5,marginTop:10}} onClick={e=>e.stopPropagation()}>{durum!=='devamediyor'&&durum!=='tamamlandi'&&<button style={S.btnO} onClick={()=>move(i.id,'devamediyor')}>🔄</button>}{durum!=='tamamlandi'&&<button style={S.btn(C.green)} onClick={()=>tamamlaVeFaturalastir(i)} title="Tamamla ve muhasebeye gönder">✓</button>}<button style={S.btnR} onClick={()=>del(i.id)}>🗑</button></div></div>);})}</div>))}
+      {islerFiltreli.filter(i=>i.durum===durum).map(i=>{const a=araclar.find(x=>x.id===i.aracId),per=personel.find(x=>x.id===i.opId);const sahaServisi=servisIdSet.has(i.tur);const servisIcon=servisTipleri.find(([k])=>k===i.tur)?.[1]||'🚨';return(<div key={i.id} style={{...S.card,marginBottom:10,borderLeft:`3px solid ${sahaServisi?C.red:oncRenk[i.oncelik]}`,cursor:'pointer'}} onClick={()=>{setForm(i);setErr('');setModal(true);}}><div style={{fontWeight:700,color:C.white,fontSize:13}}>{sahaServisi&&`${servisIcon} `}{i.baslik}</div><div style={{fontSize:11,color:C.accent,marginTop:4}}>{i.cariTipi==='tedarikci'?'🏭':'🧾'} {cariAdi(i)}</div><div style={{fontSize:11,color:C.muted,marginTop:4}}>{a?.ad||'—'}{per?` · 🧑‍💼 ${per.ad}`:''}</div>{sahaServisi&&i.olayYeri&&<div style={{fontSize:11,color:C.red,marginTop:2}}>📍 {i.olayYeri}</div>}{sahaServisi&&i.musteriPlaka&&<div style={{fontSize:11,color:C.muted,marginTop:2}}>🚗 {i.musteriPlaka}{i.musteriAracModel?` · ${i.musteriAracModel}`:''}</div>}{i.fisNo&&<div style={{fontSize:11,color:C.muted,marginTop:2}}>🧾 Fiş No: {i.fisNo}</div>}{+i.tutar>0&&<div style={{fontSize:11,color:C.text,marginTop:2}}>💰 {fmtTL(i.tutar)}</div>}<div style={{fontSize:11,color:C.muted,marginTop:4}}>📅 {fmtDate(i.bitis)}</div>{i.faturaId&&<div style={{fontSize:11,color:C.green,marginTop:4}}>✅ Faturalandı</div>}{(i.evraklar||[]).length>0&&<div style={{fontSize:11,color:C.blue,marginTop:4}}>📎 {i.evraklar.length} evrak</div>}<div style={{display:'flex',gap:5,marginTop:10,flexWrap:'wrap'}} onClick={e=>e.stopPropagation()}>{durum!=='devamediyor'&&durum!=='tamamlandi'&&<button style={S.btnO} onClick={()=>move(i.id,'devamediyor')}>🔄</button>}{durum!=='tamamlandi'&&<button style={S.btn(C.green)} onClick={()=>tamamlaVeFaturalastir(i)} title="Tamamla ve muhasebeye gönder">✓</button>}{isEmriWaLink(i)&&<a href={isEmriWaLink(i)} target="_blank" rel="noopener noreferrer" style={{...S.btnO,textDecoration:'none',display:'inline-block'}} title="Personele WhatsApp'tan Gönder">📲</a>}<button style={S.btnR} onClick={()=>del(i.id)}>🗑</button></div></div>);})}</div>))}
     </div>
     {modal&&(<Modal title={form.id?(servisIdSet.has(form.tur)?'Saha Hizmeti Talebi Düzenle':'İş Emri Düzenle'):(servisIdSet.has(form.tur)?'Yeni Saha Hizmeti Talebi':'Yeni İş Emri')} onClose={()=>setModal(false)}>
-      <FG label="İş Türü"><select style={S.sel} value={form.tur||'genel'} onChange={e=>setForm(f=>({...f,tur:e.target.value,servisSebep:null}))}><option value="genel">📌 Genel İş Emri</option>{servisTipleri.map(([k,icon,l])=><option key={k} value={k}>{icon} {l}</option>)}</select></FG>
-      <FG label="Yapılacak İş"><input style={S.inp} value={form.baslik||''} onChange={e=>setForm(f=>({...f,baslik:e.target.value}))} placeholder={servisIdSet.has(form.tur)?'Örn: Parsel yolunda kepçe arızası...':'Örn: Parsel 2283/7 sürüm işi...'}/></FG>
-      <FG label="Açıklama"><textarea style={S.ta} value={form.aciklama||''} onChange={e=>setForm(f=>({...f,aciklama:e.target.value}))}/></FG>
+      <FG label="İş Türü"><select style={S.sel} value={form.tur||'genel'} onChange={e=>{const yeniTur=e.target.value;setForm(f=>({...f,tur:yeniTur,servisSebep:null,aracId:null,talepSaati:servisIdSet.has(yeniTur)?(f.talepSaati||nowTime()):f.talepSaati}));}}><option value="genel">📌 Genel İş Emri</option>{servisTipleri.map(([k,icon,l])=><option key={k} value={k}>{icon} {l}</option>)}</select></FG>
       {servisIdSet.has(form.tur)&&(<div style={{...S.card,background:`${C.red}11`,borderColor:`${C.red}44`,marginBottom:16}}>
         <div style={{...S.secTitle,color:C.red,marginBottom:10}}>{servisLabelMap[form.tur]} Bilgileri</div>
         <div style={S.g2}>
@@ -2476,15 +2502,14 @@ function IsEmirleri(){
           <FG label="Marka/Model / Ek Bilgi"><input style={S.inp} value={form.musteriAracModel||''} onChange={e=>setForm(f=>({...f,musteriAracModel:e.target.value}))} placeholder="Opsiyonel"/></FG>
         </div>
       </div>)}
-      <div style={S.g2}>
-        <FG label="Cari Tipi"><select style={S.sel} value={form.cariTipi||'musteri'} onChange={e=>setForm(f=>({...f,cariTipi:e.target.value,cariId:null}))}><option value="musteri">🧾 Müşteri</option><option value="tedarikci">🏭 Tedarikçi</option></select></FG>
-        <FG label={form.cariTipi==='tedarikci'?'Tedarikçi':'Müşteri'}><div style={S.selRow}><select style={S.sel} value={form.cariId||''} onChange={e=>setForm(f=>({...f,cariId:idVal(e.target.value)}))}><option value="">— Seçiniz —</option>{(form.cariTipi==='tedarikci'?tedarikciler:musteriler).map(c=><option key={c.id} value={c.id}>{c.ad}</option>)}</select><button type="button" style={S.btnAdd} title={`Yeni ${form.cariTipi==='tedarikci'?'Tedarikçi':'Müşteri'} Ekle`} onClick={()=>setHizliEkle(true)}>＋</button></div></FG>
-      </div>
-      <div style={S.g2}><FG label={servisIdSet.has(form.tur)?`${servisLabelMap[form.tur]} Aracı`:'Araç'}><select style={S.sel} value={form.aracId||''} onChange={e=>setForm(f=>({...f,aracId:idVal(e.target.value)}))}><option value="">— Seçiniz —</option>{araclar.map(a=><option key={a.id} value={a.id}>{a.ad}</option>)}</select></FG><FG label="Sorumlu Personel / Şoför"><select style={S.sel} value={form.opId||''} onChange={e=>setForm(f=>({...f,opId:idVal(e.target.value)}))}><option value="">— Seçiniz —</option>{personel.map(o=><option key={o.id} value={o.id}>{o.ad}</option>)}</select></FG></div>
+      <FG label="Cari (Müşteri / Tedarikçi)"><div style={S.selRow}><select style={S.sel} value={form.cariId||''} onChange={e=>{const cid=idVal(e.target.value);const c=cariler.find(x=>x.id===cid);const tipler=c?.tipler||[];const cariTipi=tipler.includes('musteri')?'musteri':(tipler.includes('tedarikci')?'tedarikci':'musteri');setForm(f=>({...f,cariId:cid,cariTipi}));}}><option value="">— Seçiniz —</option>{cariler.map(c=><option key={c.id} value={c.id}>{c.ad}{(c.tipler||[]).length>1?' (Müşteri+Tedarikçi)':''}</option>)}</select><button type="button" style={S.btnAdd} title="Yeni Cari Ekle" onClick={()=>setHizliEkle(true)}>＋</button></div></FG>
+      <div style={S.g2}><FG label={servisIdSet.has(form.tur)?`${servisLabelMap[form.tur]} Aracı`:'Araç'}><select style={S.sel} value={form.aracId||''} onChange={e=>setForm(f=>({...f,aracId:idVal(e.target.value)}))}><option value="">— Seçiniz —</option>{araclarFiltreli(form.tur).map(a=><option key={a.id} value={a.id}>{a.ad}</option>)}</select>{servisIdSet.has(form.tur)&&<div style={{fontSize:11,color:C.muted,marginTop:4}}>ℹ️ Araç listesi "{servisLabelMap[form.tur]}" kategorisine göre daraltılmıştır (uygun araç bulunamazsa tüm araçlar gösterilir).</div>}</FG><FG label="Sorumlu Personel / Şoför"><select style={S.sel} value={form.opId||''} onChange={e=>setForm(f=>({...f,opId:idVal(e.target.value)}))}><option value="">— Seçiniz —</option>{personel.map(o=><option key={o.id} value={o.id}>{o.ad}</option>)}</select></FG></div>
       <div style={S.g2}><FG label="Bitiş Tarihi"><input type="date" style={S.inp} value={form.bitis||''} onChange={e=>setForm(f=>({...f,bitis:e.target.value}))}/></FG><FG label="Öncelik"><select style={S.sel} value={form.oncelik||'normal'} onChange={e=>setForm(f=>({...f,oncelik:e.target.value}))}><option value="kritik">🔴 Kritik</option><option value="normal">🔵 Normal</option><option value="dusuk">⚪ Düşük</option></select></FG></div>
       <FG label="Fiş No"><input style={S.inp} value={form.fisNo||''} onChange={e=>setForm(f=>({...f,fisNo:e.target.value}))} placeholder="Örn: 000123"/></FG>
       <TutarKdvAlani form={form} setForm={setForm}/>
       {form.faturaId&&<div style={S.alert(C.green)}>✅ Bu iş emri faturalandırılmış durumda. Muhasebe &gt; Faturalar bölümünden görüntüleyebilirsiniz.</div>}
+      {form.id&&(isEmriWaLink(form)?<div style={{marginBottom:12}}><a href={isEmriWaLink(form)} target="_blank" rel="noopener noreferrer" style={{...S.btn(C.green),textDecoration:'none',display:'inline-block'}}>📲 Personele WhatsApp'tan Gönder</a></div>:<div style={{fontSize:11,color:C.muted,marginBottom:12}}>ℹ️ Sorumlu personelin telefon numarası tanımlı değil, bu yüzden WhatsApp gönderilemiyor.</div>)}
+      <FG label="Açıklama"><textarea style={S.ta} value={form.aciklama||''} onChange={e=>setForm(f=>({...f,aciklama:e.target.value}))} placeholder="Yapılacak işin detayları..."/></FG>
       <FG label="Evraklar (Fotoğraf, Fiş, Sözleşme vb.)">
         <input type="file" style={S.inp} onChange={e=>{
           const dosya=e.target.files[0];
@@ -2531,7 +2556,7 @@ function IsEmirleri(){
       <FormError msg={err}/>
       <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginTop:8}}><button style={S.btnO} onClick={()=>setModal(false)}>İptal</button><button style={S.btn()} onClick={save}>Kaydet</button></div>
     </Modal>)}
-    {hizliEkle&&<HizliCariEkle tip={form.cariTipi==='tedarikci'?'tedarikci':'musteri'} onClose={()=>setHizliEkle(false)} onEklendi={(yeni,n)=>{setMusteriler(n.filter(c=>(c.tipler||[]).includes('musteri')));setTedarikciler(n.filter(c=>(c.tipler||[]).includes('tedarikci')));setForm(f=>({...f,cariId:yeni.id}));setHizliEkle(false);}}/>}
+    {hizliEkle&&<HizliCariEkle tip="musteri" onClose={()=>setHizliEkle(false)} onEklendi={(yeni,n)=>{setCariler(n);setForm(f=>({...f,cariId:yeni.id,cariTipi:(yeni.tipler||[]).includes('musteri')?'musteri':'tedarikci'}));setHizliEkle(false);}}/>}
   </div>);
 }
 
@@ -4977,7 +5002,7 @@ const rolSayfalari=(rol)=>{const r=ROL_TANIMLARI[rol];if(!r)return null;return r
 
 // ── App ───────────────────────────────────────────────────────────────────────
 function App(){
-  useEffect(()=>{seed();migratePersonelModulu();migrateCariBirlestir();ensureSettings();},[]);
+  useEffect(()=>{seed();migratePersonelModulu();migrateCariBirlestir();ensureSettings();migrateSahaServisTipleriEkle();},[]);
   const [active,setActive]=useState(()=>{const h=window.location.hash.replace('#','');if(ESKI_SAYFA_YONLENDIRME[h])return ESKI_SAYFA_YONLENDIRME[h];if(ALL_PAGES.some(p=>p.id===h))return h;return getSettings().baslangicSayfasi||'dashboard';});
   const [menuOpen,setMenuOpen]=useState(false);
   const [,forceThemeRender]=useState(0);
