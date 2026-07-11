@@ -653,7 +653,7 @@ function SyncBadge(){
 // ── Settings ─────────────────────────────────────────────────────────────────
 const DEFAULT_SETTINGS={
   firmaAdi:'FiloPro A.Ş.', firmaAdres:'Akhisar, Manisa', firmaTel:'0532 000 0000', firmaVergiNo:'', firmaVergiDaire:'',
-  paraBirimi:'₺', tarihFormati:'gg.aa.yyyy', kdvOrani:20, varsayilanYakitFiyat:44,
+  paraBirimi:'₺', tarihFormati:'gg.aa.yyyy', kdvOrani:20, varsayilanYakitFiyat:44, hizLimitiKmh:90,
   esikKritikGun:7, esikUyariGun:30, opBelgeEsikGun:60,
   bildirimEmail:true, bildirimSms:true, bildirimSistem:true,
   vardiyaBaslangic:'07:30', vardiyaBitis:'17:30',
@@ -679,7 +679,7 @@ const DEFAULT_SETTINGS={
   backendApiUrl:'', backendApiKey:'',
 };
 const ACCENT_MAP={amber:'#f59e0b',blue:'#3b82f6',green:'#22c55e',purple:'#a855f7',red:'#ef4444',teal:'#14b8a6'};
-const ALL_DATA_KEYS=['araclar','personel','departmanlar','izinler','mesailer','egitimler','adaylar','degerlendirmeler','isGuvenligiOlaylari','bordroEkKalemler','bordroArsiv','bakimlar','yakitlar','hasarlar','parcalar','isemirleri','gorevler','projeler','hesaplar','gelirGider','faturalar','kasaHareketleri','cariler','pompalar','yakitLimitler','otomatikIkmaller','sahaCalisma','sahaAriza','konumlar','bildirimTercih','kullanicilar','islemLoglari','erpBaglantilar','erpAktarimlar','depolar','envanterKalemleri','stokHareketleri','bekciKopekleri','kopekAsilari','kopekSaglikKayitlari','kopekMasraflari','telegramMasrafBildirimleri','ayarlar'];
+const ALL_DATA_KEYS=['araclar','personel','departmanlar','izinler','mesailer','egitimler','adaylar','degerlendirmeler','isGuvenligiOlaylari','bordroEkKalemler','bordroArsiv','bakimlar','yakitlar','hasarlar','parcalar','isemirleri','gorevler','projeler','hesaplar','gelirGider','faturalar','kasaHareketleri','cariler','pompalar','yakitLimitler','otomatikIkmaller','sahaCalisma','sahaAriza','konumlar','konumGecmisi','bildirimTercih','kullanicilar','islemLoglari','erpBaglantilar','erpAktarimlar','depolar','envanterKalemleri','stokHareketleri','bekciKopekleri','kopekAsilari','kopekSaglikKayitlari','kopekMasraflari','telegramMasrafBildirimleri','ayarlar'];
 // modulDurumu iç içe (nested) birleştirilir; aksi halde kullanıcı ayar kaydettikten
 // sonra eklenen yeni bir modül varsayılan olarak gizli kalabilirdi.
 const getSettings=()=>{
@@ -695,6 +695,7 @@ const MODUL_LISTESI=[
   {id:'isemri',label:'İş Emirleri',icon:'📌'},
   {id:'arac',label:'Araç Yönetimi',icon:'🚜'},
   {id:'konum',label:'Canlı Konum',icon:'📍'},
+  {id:'surucu',label:'Sürücü Değerlendirme',icon:'🚦'},
   {id:'muhasebe',label:'Muhasebe',icon:'💰'},
   {id:'ik',label:'İnsan Kaynakları',icon:'🧑‍💼'},
   {id:'gorevler',label:'Görevler',icon:'✅'},
@@ -760,6 +761,67 @@ const whatsappLinkOlustur=(tel,mesaj)=>{
   if(!n)return null;
   return `https://wa.me/${n}?text=${encodeURIComponent(mesaj)}`;
 };
+
+// ── Sürücü Değerlendirme & İzleme — konum geçmişi ve analiz yardımcıları ──────────
+// 'konumlar' sadece SON bilinen konumu tutar (upsert); sürüş analizi (mesafe, hız
+// ihlali, zaman içindeki eğilim) için buna ek olarak sınırlı bir GEÇMİŞ log'u tutulur.
+// Depolamanın şişmemesi için: kişi başına en fazla ~500 nokta VE son 30 günden eski
+// noktalar otomatik budanır (LS.set üzerinden dirty-tracking'e uygun, id bazlı).
+const KONUM_GECMISI_MAX_GUN=30;
+const KONUM_GECMISI_MAX_NOKTA=500;
+function konumGecmisiKaydet(tip,hedefId,pos,zamanISO){
+  const gecmis=LS.get('konumGecmisi')||[];
+  const yeni={id:uid(),tip,hedefId,lat:pos.coords.latitude,lng:pos.coords.longitude,hiz:pos.coords.speed||null,zaman:zamanISO};
+  const esikTarih=Date.now()-KONUM_GECMISI_MAX_GUN*86400000;
+  const buKisiEski=gecmis.filter(k=>k.tip===tip&&k.hedefId===hedefId).sort((a,b)=>a.zaman.localeCompare(b.zaman));
+  const buKisiYeni=[...buKisiEski,yeni].filter(k=>new Date(k.zaman).getTime()>=esikTarih).slice(-KONUM_GECMISI_MAX_NOKTA);
+  const digerleri=gecmis.filter(k=>!(k.tip===tip&&k.hedefId===hedefId));
+  LS.set('konumGecmisi',[...digerleri,...buKisiYeni]);
+}
+// İki GPS noktası arası kuş uçuşu mesafe (km) — Haversine formülü.
+function haversineKm(lat1,lng1,lat2,lng2){
+  const R=6371,dLat=(lat2-lat1)*Math.PI/180,dLng=(lng2-lng1)*Math.PI/180;
+  const a=Math.sin(dLat/2)**2+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
+// Bir personelin (tip:'personel') konum geçmişinden sürüş metriklerini hesaplar.
+function surucuMetrikleri(personelId,gunSayisi=30){
+  const esik=Date.now()-gunSayisi*86400000;
+  const noktalar=(LS.get('konumGecmisi')||[]).filter(k=>k.tip==='personel'&&k.hedefId===personelId&&new Date(k.zaman).getTime()>=esik).sort((a,b)=>a.zaman.localeCompare(b.zaman));
+  const hizLimiti=getSettings().hizLimitiKmh||90;
+  let mesafeKm=0;
+  for(let i=1;i<noktalar.length;i++){
+    const onceki=noktalar[i-1],simdi=noktalar[i];
+    // GPS sıçramalarını (sinyal hatası) elemek için art arda >5dk boşluk varsa mesafeye katma.
+    if(new Date(simdi.zaman)-new Date(onceki.zaman)>5*60000)continue;
+    mesafeKm+=haversineKm(onceki.lat,onceki.lng,simdi.lat,simdi.lng);
+  }
+  const hizlar=noktalar.filter(n=>n.hiz!=null).map(n=>n.hiz*3.6); // m/s -> km/h
+  const ortalamaHiz=hizlar.length?hizlar.reduce((s,h)=>s+h,0)/hizlar.length:0;
+  const maksHiz=hizlar.length?Math.max(...hizlar):0;
+  const ihlaller=hizlar.filter(h=>h>hizLimiti).length;
+  return{noktaSayisi:noktalar.length,mesafeKm,ortalamaHiz,maksHiz,ihlaller,hizLimiti};
+}
+// 0-100 arası bileşik "Sürücü Skoru": hız ihlali ve iş güvenliği olayı puan kırar,
+// iş emri tamamlama oranı ve son performans değerlendirmesi puan katar.
+function surucuSkoruHesapla(personelId){
+  const metrik=surucuMetrikleri(personelId);
+  const olaylar=(LS.get('isGuvenligiOlaylari')||[]).filter(o=>o.personelId===personelId);
+  const isEmirleri=(LS.get('isemirleri')||[]).filter(i=>i.opId===personelId);
+  const tamamlanan=isEmirleri.filter(i=>i.durum==='tamamlandi').length;
+  const tamamlamaOrani=isEmirleri.length?tamamlanan/isEmirleri.length:null;
+  const degerlendirmeler=(LS.get('degerlendirmeler')||[]).filter(d=>d.personelId===personelId).sort((a,b)=>(a.tarih||'').localeCompare(b.tarih||''));
+  const sonDeger=degerlendirmeler[degerlendirmeler.length-1];
+  const sonPuan=sonDeger?((+sonDeger.verimlilik||0)+(+sonDeger.isKalitesi||0)+(+sonDeger.devamDisiplin||0)+(+sonDeger.ekipUyumu||0))/4:null;
+  let skor=100;
+  skor-=Math.min(40,metrik.ihlaller*5); // her hız ihlali -5 (en fazla -40)
+  skor-=Math.min(30,olaylar.length*10); // her iş güvenliği olayı -10 (en fazla -30)
+  if(tamamlamaOrani!=null)skor+=(tamamlamaOrani-0.8)*25; // %80 üzeri tamamlama bonus, altı ceza
+  if(sonPuan!=null)skor+=(sonPuan-3)*5; // 5 üzerinden 3 nötr kabul edilir
+  skor=Math.max(0,Math.min(100,Math.round(skor)));
+  return{skor,metrik,olaySayisi:olaylar.length,tamamlamaOrani,sonPuan,isEmriSayisi:isEmirleri.length};
+}
+
 // Telegram Bot API tarayıcıdan doğrudan çağrılabilir (CORS'a izin verir), bu yüzden
 // Telegram bildirimleri tek tıkla değil, gerçek anlamda otomatik gönderilir.
 async function telegramMesajGonder(chatId,mesaj){
@@ -5131,9 +5193,11 @@ function CanliKonum(){
       (pos)=>{
         const recId=`${kimlikTip}-${kimlikId}`;
         const guncel=LS.get('konumlar')||[];
-        const yeni={id:recId,tip:kimlikTip,hedefId:kimlikId,lat:pos.coords.latitude,lng:pos.coords.longitude,dogruluk:pos.coords.accuracy||null,hiz:pos.coords.speed||null,guncellendi:new Date().toISOString()};
+        const zaman=new Date().toISOString();
+        const yeni={id:recId,tip:kimlikTip,hedefId:kimlikId,lat:pos.coords.latitude,lng:pos.coords.longitude,dogruluk:pos.coords.accuracy||null,hiz:pos.coords.speed||null,guncellendi:zaman};
         const n=guncel.some(k=>k.id===recId)?guncel.map(k=>k.id===recId?yeni:k):[...guncel,yeni];
         LS.set('konumlar',n);setKonumlar(n);
+        konumGecmisiKaydet(kimlikTip,kimlikId,pos,zaman);
       },
       (err)=>{setHataMsg('Konum alınamadı: '+(err.message||'bilinmeyen hata')+'. Tarayıcı/telefon ayarlarından bu siteye konum izni verin.');setPaylasiliyor(false);},
       {enableHighAccuracy:true,maximumAge:10000,timeout:20000}
@@ -5185,6 +5249,105 @@ function CanliKonum(){
   </div>);
 }
 
+// ── Sürücü Değerlendirme & İzleme ────────────────────────────────────────────────
+function SurucuDegerlendirme(){
+  const personel=LS.get('personel').filter(p=>p.durum==='aktif');
+  const [secili,setSecili]=useState(null);
+  const [aiRapor,setAiRapor]=useState(''),[aiYukleniyor,setAiYukleniyor]=useState(false),[aiHata,setAiHata]=useState('');
+  const [gunSayisi]=useState(30);
+  const hizLimiti=getSettings().hizLimitiKmh||90;
+  const bagli=!!getSyncCfg().token;
+
+  const siralanmis=useMemo(()=>personel.map(p=>({p,...surucuSkoruHesapla(p.id)})).sort((a,b)=>b.skor-a.skor),[personel.length]);
+  const seciliVeri=secili?siralanmis.find(s=>s.p.id===secili):null;
+  const gecmisNoktalar=useMemo(()=>{
+    if(!secili)return[];
+    const esik=Date.now()-gunSayisi*86400000;
+    return(LS.get('konumGecmisi')||[]).filter(k=>k.tip==='personel'&&k.hedefId===secili&&new Date(k.zaman).getTime()>=esik).sort((a,b)=>a.zaman.localeCompare(b.zaman));
+  },[secili]);
+  // Günlük maksimum hız grafiği için noktaları güne göre grupla.
+  const gunlukMaksHiz=useMemo(()=>{
+    const map={};
+    gecmisNoktalar.forEach(n=>{if(n.hiz==null)return;const gun=n.zaman.slice(0,10);const kmh=n.hiz*3.6;if(!map[gun]||kmh>map[gun])map[gun]=kmh;});
+    return Object.entries(map).sort(([a],[b])=>a.localeCompare(b)).map(([gun,hiz])=>({gun:gun.slice(5),hiz:Math.round(hiz)}));
+  },[gecmisNoktalar]);
+
+  const renkSkor=(s)=>s>=80?C.green:s>=60?C.yellow:C.red;
+  const hasRC=!!RC.LineChart;
+
+  const aiDegerlendirmeIste=async()=>{
+    if(!seciliVeri)return;
+    if(!bagli){setAiHata('AI değerlendirmesi için önce Ayarlar > Senkronizasyon üzerinden sunucuya bağlanmalısınız (AI isteği sunucu üzerinden güvenli şekilde işlenir).');return;}
+    setAiYukleniyor(true);setAiHata('');setAiRapor('');
+    const cfg=getSyncCfg();
+    const {p,skor,metrik,olaySayisi,tamamlamaOrani,sonPuan,isEmriSayisi}=seciliVeri;
+    const prompt=`Sen bir filo yönetimi uzmanısın. Aşağıdaki verilere dayanarak "${p.ad}" adlı sürücü/operatör için 3-4 cümlelik, yapıcı ve somut önerili bir Türkçe değerlendirme paragrafı yaz. Sayısal verileri tekrar tekrar sıralama, yorumla.
+
+Veriler (son ${gunSayisi} gün):
+- Sürücü Skoru: ${skor}/100
+- Kat edilen mesafe: ${metrik.mesafeKm.toFixed(0)} km (${metrik.noktaSayisi} GPS noktası)
+- Ortalama hız: ${metrik.ortalamaHiz.toFixed(0)} km/s, Maksimum hız: ${metrik.maksHiz.toFixed(0)} km/s
+- Hız limiti (${metrik.hizLimiti} km/s) ihlali: ${metrik.ihlaller} kez
+- İş güvenliği olayı: ${olaySayisi} kez
+- İş emri tamamlama oranı: ${tamamlamaOrani!=null?Math.round(tamamlamaOrani*100)+'%':'veri yok'} (${isEmriSayisi} iş emri)
+- Son performans değerlendirme puanı: ${sonPuan!=null?sonPuan.toFixed(1)+'/5':'değerlendirme yok'}
+
+Sadece değerlendirme paragrafını yaz, başlık veya madde işareti kullanma.`;
+    try{
+      const res=await fetch(`${cfg.url}/api/ai/chat`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${cfg.token}`},body:JSON.stringify({prompt,maxTokens:400})});
+      const data=await res.json().catch(()=>({}));
+      if(!res.ok)throw new Error(data.error||'Yanıt alınamadı.');
+      setAiRapor(data.text||'Yanıt boş döndü.');
+    }catch(e){
+      setAiHata(e.message||'AI değerlendirmesi alınamadı.');
+    }finally{
+      setAiYukleniyor(false);
+    }
+  };
+
+  return(<div>
+    <InfoBox color={C.blue}>ℹ️ Bu modül, personelin Canlı Konum özelliğiyle paylaştığı GPS verilerine (hız, konum geçmişi), iş emri tamamlama oranına, iş güvenliği kayıtlarına ve performans değerlendirmelerine dayanır. Bir personelin verisi görünmesi için Canlı Konum'dan en az birkaç kez konum paylaşmış olması gerekir. Hız limiti Ayarlar'dan değiştirilebilir (şu an: {hizLimiti} km/s).</InfoBox>
+    <div style={S.g3}>
+      <StatCard color={C.blue} value={siralanmis.length} label="Değerlendirilen Personel"/>
+      <StatCard color={C.yellow} value={siralanmis.reduce((s,x)=>s+x.metrik.ihlaller,0)} label="Toplam Hız İhlali (30 gün)"/>
+      <StatCard color={siralanmis.length?renkSkor(Math.round(siralanmis.reduce((s,x)=>s+x.skor,0)/siralanmis.length)):C.muted} value={siralanmis.length?Math.round(siralanmis.reduce((s,x)=>s+x.skor,0)/siralanmis.length):'—'} label="Ortalama Filo Skoru"/>
+    </div>
+    <div style={S.g2}>
+      <div style={S.card}>
+        <div style={S.secTitle}>🚦 Sürücü Sıralaması</div>
+        <table style={S.tbl}><thead><tr><th style={S.th}>Personel</th><th style={S.th}>Skor</th><th style={S.th}>Mesafe</th><th style={S.th}>İhlal</th><th style={S.th}></th></tr></thead>
+        <tbody>{siralanmis.map(s=>(<tr key={s.p.id} style={{cursor:'pointer',background:secili===s.p.id?`${C.accent}11`:'transparent'}} onClick={()=>{setSecili(s.p.id);setAiRapor('');setAiHata('');}}>
+          <td style={S.td}><strong style={{color:C.white}}>{s.p.ad}</strong><div style={{fontSize:11,color:C.muted}}>{s.p.pozisyon||'—'}</div></td>
+          <td style={S.td}><span style={{...S.badge(renkSkor(s.skor)),fontWeight:700}}>{s.skor}</span></td>
+          <td style={S.td}>{s.metrik.mesafeKm.toFixed(0)} km</td>
+          <td style={S.td}>{s.metrik.ihlaller>0?<span style={{color:C.red}}>{s.metrik.ihlaller}</span>:'0'}</td>
+          <td style={S.td}><button style={S.btnO} onClick={(e)=>{e.stopPropagation();setSecili(s.p.id);setAiRapor('');setAiHata('');}}>Detay →</button></td>
+        </tr>))}{siralanmis.length===0&&<tr><td style={S.td} colSpan={5}><div style={{textAlign:'center',color:C.muted,padding:20}}>Aktif personel yok.</div></td></tr>}</tbody></table>
+      </div>
+      <div style={S.card}>
+        <div style={S.secTitle}>📈 {seciliVeri?`${seciliVeri.p.ad} — Günlük Maks. Hız`:'Detay için soldan bir personel seçin'}</div>
+        {!seciliVeri?<div style={{color:C.muted,fontSize:13}}>—</div>:(<>
+          <div style={S.g3}>
+            <StatCard color={renkSkor(seciliVeri.skor)} value={seciliVeri.skor} label="Sürücü Skoru"/>
+            <StatCard color={C.blue} value={`${seciliVeri.metrik.ortalamaHiz.toFixed(0)} km/s`} label="Ortalama Hız"/>
+            <StatCard color={seciliVeri.metrik.ihlaller>0?C.red:C.green} value={seciliVeri.metrik.ihlaller} label="Hız İhlali"/>
+          </div>
+          {!hasRC?<div style={{color:C.muted,fontSize:13}}>Grafik kütüphanesi yüklenemedi.</div>:gunlukMaksHiz.length===0?<div style={{color:C.muted,fontSize:13,marginTop:10}}>Henüz konum geçmişi verisi yok.</div>:(
+            <ResponsiveContainer width="100%" height={180}>
+              <LineChart data={gunlukMaksHiz}><CartesianGrid strokeDasharray="3 3" stroke={C.border}/><XAxis dataKey="gun" tick={{fill:C.muted,fontSize:10}}/><YAxis tick={{fill:C.muted,fontSize:10}}/><Tooltip contentStyle={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,fontSize:12}} formatter={v=>`${v} km/s`}/><Line type="monotone" dataKey="hiz" stroke={C.accent} strokeWidth={2} dot={{r:3}}/></LineChart>
+            </ResponsiveContainer>
+          )}
+          <div style={{marginTop:16,paddingTop:16,borderTop:`1px solid ${C.border}`}}>
+            <button style={S.btn()} onClick={aiDegerlendirmeIste} disabled={aiYukleniyor}>{aiYukleniyor?'⏳ Analiz ediliyor...':'🤖 AI Değerlendirme Raporu Oluştur'}</button>
+            {aiHata&&<div style={{...S.alert(C.red),marginTop:10}}>⚠️ {aiHata}</div>}
+            {aiRapor&&<div style={{...S.alert(C.blue),marginTop:10,lineHeight:1.6}}>{aiRapor}</div>}
+          </div>
+        </>)}
+      </div>
+    </div>
+  </div>);
+}
+
 // ── Pages Config ──────────────────────────────────────────────────────────────
 const PAGES=[
   {group:'',items:[
@@ -5192,6 +5355,7 @@ const PAGES=[
     {id:'isemri',label:'İş Emirleri',icon:'📌',comp:IsEmirleri},
     {id:'arac',label:'Araç Yönetimi',icon:'🚜',comp:AracYonetimi},
     {id:'konum',label:'Canlı Konum',icon:'📍',comp:CanliKonum},
+    {id:'surucu',label:'Sürücü Değerlendirme',icon:'🚦',comp:SurucuDegerlendirme},
     {id:'muhasebe',label:'Muhasebe',icon:'💰',comp:Muhasebe},
     {id:'ik',label:'İnsan Kaynakları',icon:'🧑‍💼',comp:InsanKaynaklari},
     {id:'gorevler',label:'Görevler',icon:'✅',comp:Gorevler},
@@ -5213,7 +5377,7 @@ const ESKI_SAYFA_YONLENDIRME={bakim:'arac',yakit:'arac',evrak:'arac',hasar:'arac
 const ROL_TANIMLARI = {
   admin:    {renkKey:'red',    label:'Admin',     aciklama:'Tüm modüllere tam erişim.',                                  sayfalar:'*'},
   muhasebe: {renkKey:'purple', label:'Muhasebe',  aciklama:'Gelir-gider, fatura, kasa-banka ve ilgili raporlar.',        sayfalar:['dashboard','muhasebe','arac','proje','depo','bekciler','ayarlar']},
-  sef:      {renkKey:'blue',   label:'Şef',       aciklama:'Araç, bakım, iş emirleri, personel ve saha yönetimi.',       sayfalar:['dashboard','arac','konum','isemri','gorevler','ik','depo','bekciler']},
+  sef:      {renkKey:'blue',   label:'Şef',       aciklama:'Araç, bakım, iş emirleri, personel ve saha yönetimi.',       sayfalar:['dashboard','arac','konum','surucu','isemri','gorevler','ik','depo','bekciler']},
   operator: {renkKey:'green',  label:'Operatör',  aciklama:'Sadece saha girişleri ve temel görünüm.',                    sayfalar:['dashboard','arac','konum','akaryakit','gorevler']},
 };
 const rolRenk=(rol)=>C[ROL_TANIMLARI[rol]?.renkKey]||C.muted;
