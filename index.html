@@ -653,7 +653,7 @@ function SyncBadge(){
 // ── Settings ─────────────────────────────────────────────────────────────────
 const DEFAULT_SETTINGS={
   firmaAdi:'FiloPro A.Ş.', firmaAdres:'Akhisar, Manisa', firmaTel:'0532 000 0000', firmaVergiNo:'', firmaVergiDaire:'',
-  paraBirimi:'₺', tarihFormati:'gg.aa.yyyy', kdvOrani:20, varsayilanYakitFiyat:44, hizLimitiKmh:90,
+  paraBirimi:'₺', tarihFormati:'gg.aa.yyyy', kdvOrani:20, varsayilanYakitFiyat:44, hizLimitiKmh:90, acilDurumTel:'', konumBildirimTel:'',
   esikKritikGun:7, esikUyariGun:30, opBelgeEsikGun:60,
   bildirimEmail:true, bildirimSms:true, bildirimSistem:true,
   vardiyaBaslangic:'07:30', vardiyaBitis:'17:30',
@@ -679,7 +679,7 @@ const DEFAULT_SETTINGS={
   backendApiUrl:'', backendApiKey:'',
 };
 const ACCENT_MAP={amber:'#f59e0b',blue:'#3b82f6',green:'#22c55e',purple:'#a855f7',red:'#ef4444',teal:'#14b8a6'};
-const ALL_DATA_KEYS=['araclar','personel','departmanlar','izinler','mesailer','egitimler','adaylar','degerlendirmeler','isGuvenligiOlaylari','bordroEkKalemler','bordroArsiv','bakimlar','yakitlar','hasarlar','parcalar','isemirleri','gorevler','projeler','hesaplar','gelirGider','faturalar','kasaHareketleri','cariler','pompalar','yakitLimitler','otomatikIkmaller','sahaCalisma','sahaAriza','konumlar','konumGecmisi','bildirimTercih','kullanicilar','islemLoglari','erpBaglantilar','erpAktarimlar','depolar','envanterKalemleri','stokHareketleri','bekciKopekleri','kopekAsilari','kopekSaglikKayitlari','kopekMasraflari','telegramMasrafBildirimleri','ayarlar'];
+const ALL_DATA_KEYS=['araclar','personel','departmanlar','izinler','mesailer','egitimler','adaylar','degerlendirmeler','isGuvenligiOlaylari','bordroEkKalemler','bordroArsiv','bakimlar','yakitlar','hasarlar','parcalar','isemirleri','gorevler','projeler','hesaplar','gelirGider','faturalar','kasaHareketleri','cariler','pompalar','yakitLimitler','otomatikIkmaller','sahaCalisma','sahaAriza','konumlar','konumGecmisi','konumYerleri','konumOlaylari','bildirimTercih','kullanicilar','islemLoglari','erpBaglantilar','erpAktarimlar','depolar','envanterKalemleri','stokHareketleri','bekciKopekleri','kopekAsilari','kopekSaglikKayitlari','kopekMasraflari','telegramMasrafBildirimleri','ayarlar'];
 // modulDurumu iç içe (nested) birleştirilir; aksi halde kullanıcı ayar kaydettikten
 // sonra eklenen yeni bir modül varsayılan olarak gizli kalabilirdi.
 const getSettings=()=>{
@@ -694,8 +694,7 @@ const moduleAktifMi=(id)=>id==='dashboard'||id==='ayarlar'||getSettings().modulD
 const MODUL_LISTESI=[
   {id:'isemri',label:'İş Emirleri',icon:'📌'},
   {id:'arac',label:'Araç Yönetimi',icon:'🚜'},
-  {id:'konum',label:'Canlı Konum',icon:'📍'},
-  {id:'surucu',label:'Sürücü Değerlendirme',icon:'🚦'},
+  {id:'konum',label:'Konum & Sürücü Takip',icon:'📍'},
   {id:'muhasebe',label:'Muhasebe',icon:'💰'},
   {id:'ik',label:'İnsan Kaynakları',icon:'🧑‍💼'},
   {id:'gorevler',label:'Görevler',icon:'✅'},
@@ -801,6 +800,36 @@ function surucuMetrikleri(personelId,gunSayisi=30){
   const maksHiz=hizlar.length?Math.max(...hizlar):0;
   const ihlaller=hizlar.filter(h=>h>hizLimiti).length;
   return{noktaSayisi:noktalar.length,mesafeKm,ortalamaHiz,maksHiz,ihlaller,hizLimiti};
+}
+// Bir GPS noktasının hangi tanımlı "Yer"lerin içinde olduğunu bulur (Life360'daki "bubble"lara benzer).
+function icindeOlduguYerler(lat,lng){
+  return(LS.get('konumYerleri')||[]).filter(y=>y.aktif!==false&&haversineKm(lat,lng,y.lat,y.lng)*1000<=(y.yaricapM||300));
+}
+// Konum güncellemesi geldiğinde, tanımlı yerlere göre giriş/çıkış olaylarını tespit edip kaydeder.
+// Aynı yere art arda giriş kaydı açılmasın diye, o kişi+yer için en son olayın tipine bakılır.
+// NOT: WhatsApp linkleri (wa.me) arka planda sessizce gönderilemez — tarayıcıda açılıp elle
+// "gönder" basılması gerekir. Bu yüzden burada mesaj OTOMATİK gönderilmez; "bildir" işaretli
+// bir yerde giriş/çıkış olursa, olay "bildirimGonderildi:false" ile işaretlenir ve Canlı Konum
+// ekranındaki "Bildirim Kutusu"nda kullanıcının tek tıkla göndermesi için bekler.
+function konumGeofenceKontrol(tip,hedefId,lat,lng){
+  const yerler=LS.get('konumYerleri')||[];
+  if(!yerler.length)return;
+  const icindekiler=new Set(icindeOlduguYerler(lat,lng).map(y=>y.id));
+  const olaylar=LS.get('konumOlaylari')||[];
+  const yeniler=[];
+  yerler.forEach(y=>{
+    if(y.aktif===false)return;
+    const buKisiYer=olaylar.filter(o=>o.tip===tip&&o.hedefId===hedefId&&o.yerId===y.id).sort((a,b)=>a.zaman.localeCompare(b.zaman));
+    const sonOlay=buKisiYer[buKisiYer.length-1];
+    const suAnIcinde=icindekiler.has(y.id);
+    const oncekiIcinde=sonOlay?sonOlay.olay==='giris':false;
+    if(suAnIcinde&&!oncekiIcinde){
+      yeniler.push({id:uid(),tip,hedefId,yerId:y.id,olay:'giris',zaman:new Date().toISOString(),bildirimGonderildi:!y.bildir});
+    }else if(!suAnIcinde&&oncekiIcinde){
+      yeniler.push({id:uid(),tip,hedefId,yerId:y.id,olay:'cikis',zaman:new Date().toISOString(),bildirimGonderildi:!y.bildir});
+    }
+  });
+  if(yeniler.length)LS.set('konumOlaylari',[...olaylar,...yeniler].slice(-2000));
 }
 // 0-100 arası bileşik "Sürücü Skoru": hız ihlali ve iş güvenliği olayı puan kırar,
 // iş emri tamamlama oranı ve son performans değerlendirmesi puan katar.
@@ -4313,6 +4342,12 @@ function Ayarlar(){
         <FG label="Vardiya Başlangıcı"><input type="time" style={S.inp} value={s.vardiyaBaslangic} onChange={e=>upd('vardiyaBaslangic',e.target.value)}/></FG>
         <FG label="Vardiya Bitişi"><input type="time" style={S.inp} value={s.vardiyaBitis} onChange={e=>upd('vardiyaBitis',e.target.value)}/></FG>
       </div>
+      <div style={S.secTitle}>📍 Canlı Konum & Sürücü Değerlendirme</div>
+      <div style={S.g2}>
+        <FG label="Hız Limiti (km/s)"><input type="number" style={S.inp} value={s.hizLimitiKmh} onChange={e=>upd('hizLimitiKmh',+e.target.value)}/></FG>
+        <FG label="Acil Durum Telefonu (SOS)"><input type="tel" style={S.inp} placeholder="05XX XXX XX XX" value={s.acilDurumTel} onChange={e=>upd('acilDurumTel',e.target.value)}/></FG>
+      </div>
+      <FG label="Konum Bildirim Telefonu (Yer Giriş/Çıkış)"><input type="tel" style={S.inp} placeholder="05XX XXX XX XX" value={s.konumBildirimTel} onChange={e=>upd('konumBildirimTel',e.target.value)}/></FG>
       <InfoBox color={C.blue}>ℹ️ Bu ayarlar; fatura, gelir-gider ve yakıt modüllerinde varsayılan değer olarak kullanılır.</InfoBox>
 
       <div style={{...S.secTitle,marginTop:22}}>🧾 Fatura Numaralandırma & Vade</div>
@@ -5128,25 +5163,34 @@ function KopekMasraflari(){
 // 'konumlar' tablosuna yazar. Bu tablo ALL_DATA_KEYS içinde olduğundan, Ayarlar >
 // Senkronizasyon üzerinden bir backend bağlanmışsa diğer cihazlara ~45sn içinde
 // otomatik olarak yansır. Backend bağlı değilse konum yalnızca bu cihazda görünür.
-function CanliKonum(){
+function CanliKonumGorunumu(){
   const personel=LS.get('personel')||[],araclar=LS.get('araclar')||[];
   const [konumlar,setKonumlar]=useState(LS.get('konumlar')||[]);
+  const [yerler,setYerler]=useState(LS.get('konumYerleri')||[]);
+  const [olaylar,setOlaylar]=useState(LS.get('konumOlaylari')||[]);
   const [kimlikTip,setKimlikTip]=useState(()=>localStorage.getItem('fp_konum_tip')||'personel');
   const [kimlikId,setKimlikId]=useState(()=>{const v=localStorage.getItem('fp_konum_id');return v?idVal(v):'';});
   const [paylasiliyor,setPaylasiliyor]=useState(false);
   const [hataMsg,setHataMsg]=useState('');
+  const [pilSeviyesi,setPilSeviyesi]=useState(null);
+  const [izGosterId,setIzGosterId]=useState(null);
+  const [yerModal,setYerModal]=useState(false),[yerForm,setYerForm]=useState({});
+  const [sosGonderiliyor,setSosGonderiliyor]=useState(false);
   const watchIdRef=useRef(null);
-  const mapRef=useRef(null),mapInstRef=useRef(null),markersRef=useRef({});
+  const mapRef=useRef(null),mapInstRef=useRef(null),markersRef=useRef({}),cemberlerRef=useRef({}),izRef=useRef(null);
   const backendVar=!!getSyncCfg().token;
+  const hizLimiti=getSettings().hizLimitiKmh||90;
+  const acilDurumTel=getSettings().acilDurumTel;
 
   useEffect(()=>{
     if(!mapRef.current||mapInstRef.current||!window.L)return;
     const map=window.L.map(mapRef.current).setView([38.9637,35.2433],6);
     window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap',maxZoom:19}).addTo(map);
     mapInstRef.current=map;
-    return()=>{map.remove();mapInstRef.current=null;markersRef.current={};};
+    return()=>{map.remove();mapInstRef.current=null;markersRef.current={};cemberlerRef.current={};};
   },[]);
 
+  // Kişi/araç konum işaretçileri
   useEffect(()=>{
     const map=mapInstRef.current;
     if(!map||!window.L)return;
@@ -5156,9 +5200,10 @@ function CanliKonum(){
       const kisi=k.tip==='personel'?personel.find(p=>p.id===k.hedefId):araclar.find(a=>a.id===k.hedefId);
       const ad=kisi?.ad||'Bilinmiyor';
       const dk=Math.round((Date.now()-new Date(k.guncellendi).getTime())/60000);
-      const renk=dk<5?'#22c55e':dk<30?'#eab308':'#94a3b8';
-      const icon=window.L.divIcon({className:'',html:`<div style="background:${renk};width:16px;height:16px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,.5)"></div>`,iconSize:[16,16]});
-      const popupMetin=`<strong>${k.tip==='personel'?'👤':'🚜'} ${ad}</strong><br/>${dk<1?'az önce':dk+' dk önce'}${k.hiz?`<br/>Hız: ${Math.round(k.hiz*3.6)} km/s`:''}`;
+      const asiriHiz=k.hiz&&k.hiz*3.6>hizLimiti;
+      const renk=asiriHiz?'#ef4444':dk<5?'#22c55e':dk<30?'#eab308':'#94a3b8';
+      const icon=window.L.divIcon({className:'',html:`<div style="background:${renk};width:16px;height:16px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,.5)${asiriHiz?';animation:fpPulse 1s infinite':''}"></div>`,iconSize:[16,16]});
+      const popupMetin=`<strong>${k.tip==='personel'?'👤':'🚜'} ${ad}</strong><br/>${dk<1?'az önce':dk+' dk önce'}${k.hiz?`<br/>Hız: ${Math.round(k.hiz*3.6)} km/s${asiriHiz?' ⚠️':''}`:''}${k.pil!=null?`<br/>🔋 %${k.pil}`:''}`;
       if(markersRef.current[k.id]){
         markersRef.current[k.id].setLatLng([k.lat,k.lng]);
         markersRef.current[k.id].setIcon(icon);
@@ -5168,14 +5213,43 @@ function CanliKonum(){
       }
     });
     Object.keys(markersRef.current).forEach(id=>{if(!aktifIds.has(id)){map.removeLayer(markersRef.current[id]);delete markersRef.current[id];}});
-    if(konumlar.length>0){
+    if(konumlar.length>0&&!izGosterId){
       const bounds=window.L.latLngBounds(konumlar.map(k=>[k.lat,k.lng]));
       map.fitBounds(bounds,{padding:[40,40],maxZoom:14});
     }
   },[konumlar]);
 
+  // Tanımlı "Yer"lerin haritada daire olarak gösterimi (Life360'daki "bubble"lar gibi)
   useEffect(()=>{
-    const t=setInterval(()=>setKonumlar(LS.get('konumlar')||[]),10000);
+    const map=mapInstRef.current;
+    if(!map||!window.L)return;
+    const aktifIds=new Set();
+    yerler.forEach(y=>{
+      aktifIds.add(y.id);
+      if(cemberlerRef.current[y.id]){
+        cemberlerRef.current[y.id].setLatLng([y.lat,y.lng]).setRadius(y.yaricapM||300);
+      }else{
+        cemberlerRef.current[y.id]=window.L.circle([y.lat,y.lng],{radius:y.yaricapM||300,color:C.accent,fillColor:C.accent,fillOpacity:0.12,weight:1.5}).addTo(map).bindTooltip(y.ad,{permanent:false});
+      }
+    });
+    Object.keys(cemberlerRef.current).forEach(id=>{if(!aktifIds.has(id)){map.removeLayer(cemberlerRef.current[id]);delete cemberlerRef.current[id];}});
+  },[yerler]);
+
+  // Seçili kişinin günlük izini (rota) çizer
+  useEffect(()=>{
+    const map=mapInstRef.current;
+    if(!map||!window.L)return;
+    if(izRef.current){map.removeLayer(izRef.current);izRef.current=null;}
+    if(!izGosterId)return;
+    const esik=Date.now()-1*86400000;
+    const noktalar=(LS.get('konumGecmisi')||[]).filter(k=>`${k.tip}-${k.hedefId}`===izGosterId&&new Date(k.zaman).getTime()>=esik).sort((a,b)=>a.zaman.localeCompare(b.zaman));
+    if(noktalar.length<2)return;
+    izRef.current=window.L.polyline(noktalar.map(n=>[n.lat,n.lng]),{color:C.blue,weight:3,opacity:0.7}).addTo(map);
+    map.fitBounds(izRef.current.getBounds(),{padding:[40,40]});
+  },[izGosterId]);
+
+  useEffect(()=>{
+    const t=setInterval(()=>{setKonumlar(LS.get('konumlar')||[]);setOlaylar(LS.get('konumOlaylari')||[]);},10000);
     return()=>clearInterval(t);
   },[]);
 
@@ -5183,30 +5257,74 @@ function CanliKonum(){
 
   const kimlikSecenekleri=kimlikTip==='personel'?personel:araclar;
 
-  const baslat=()=>{
+  const pilOku=async()=>{
+    try{
+      if(navigator.getBattery){const b=await navigator.getBattery();setPilSeviyesi(Math.round(b.level*100));return Math.round(b.level*100);}
+    }catch{}
+    return null;
+  };
+
+  const baslat=async()=>{
     if(!kimlikId){setHataMsg('Önce kim olduğunuzu seçin.');return;}
     if(!navigator.geolocation){setHataMsg('Bu cihaz/tarayıcı konum paylaşımını desteklemiyor.');return;}
     setHataMsg('');
     localStorage.setItem('fp_konum_tip',kimlikTip);
     localStorage.setItem('fp_konum_id',String(kimlikId));
+    const pil=await pilOku();
     watchIdRef.current=navigator.geolocation.watchPosition(
       (pos)=>{
         const recId=`${kimlikTip}-${kimlikId}`;
         const guncel=LS.get('konumlar')||[];
         const zaman=new Date().toISOString();
-        const yeni={id:recId,tip:kimlikTip,hedefId:kimlikId,lat:pos.coords.latitude,lng:pos.coords.longitude,dogruluk:pos.coords.accuracy||null,hiz:pos.coords.speed||null,guncellendi:zaman};
+        const yeni={id:recId,tip:kimlikTip,hedefId:kimlikId,lat:pos.coords.latitude,lng:pos.coords.longitude,dogruluk:pos.coords.accuracy||null,hiz:pos.coords.speed||null,pil:pilSeviyesi,guncellendi:zaman};
         const n=guncel.some(k=>k.id===recId)?guncel.map(k=>k.id===recId?yeni:k):[...guncel,yeni];
         LS.set('konumlar',n);setKonumlar(n);
         konumGecmisiKaydet(kimlikTip,kimlikId,pos,zaman);
+        konumGeofenceKontrol(kimlikTip,kimlikId,pos.coords.latitude,pos.coords.longitude);
+        setOlaylar(LS.get('konumOlaylari')||[]);
       },
       (err)=>{setHataMsg('Konum alınamadı: '+(err.message||'bilinmeyen hata')+'. Tarayıcı/telefon ayarlarından bu siteye konum izni verin.');setPaylasiliyor(false);},
       {enableHighAccuracy:true,maximumAge:10000,timeout:20000}
     );
     setPaylasiliyor(true);
+    if(pil!=null)setTimeout(pilOku,600000); // pil seviyesini 10 dk'da bir tazele
   };
   const durdur=()=>{
     if(watchIdRef.current!=null)navigator.geolocation.clearWatch(watchIdRef.current);
     watchIdRef.current=null;setPaylasiliyor(false);
+  };
+
+  const sosGonder=()=>{
+    if(!acilDurumTel){setHataMsg('Önce Ayarlar > Senkronizasyon bölümünden bir "Acil Durum Telefonu" tanımlayın.');return;}
+    setSosGonderiliyor(true);
+    const gonderLink=(lat,lng)=>{
+      const kimAdi=kimlikId?kimlikSecenekleri.find(x=>x.id===kimlikId)?.ad:'Bilinmeyen kullanıcı';
+      const mesaj=`🆘 ACİL DURUM — ${kimAdi}\nKonum: https://www.google.com/maps?q=${lat},${lng}\nZaman: ${new Date().toLocaleString('tr-TR')}`;
+      const link=whatsappLinkOlustur(acilDurumTel,mesaj);
+      if(link)window.open(link,'_blank');
+      setSosGonderiliyor(false);
+    };
+    if(navigator.geolocation){
+      navigator.geolocation.getCurrentPosition(
+        (pos)=>gonderLink(pos.coords.latitude,pos.coords.longitude),
+        ()=>{const son=konumlar.find(k=>k.id===`${kimlikTip}-${kimlikId}`);if(son)gonderLink(son.lat,son.lng);else{setHataMsg('Konum alınamadı, SOS gönderilemedi.');setSosGonderiliyor(false);}},
+        {enableHighAccuracy:true,timeout:10000}
+      );
+    }else{setSosGonderiliyor(false);setHataMsg('Bu cihaz konum almayı desteklemiyor.');}
+  };
+
+  const yerKaydet=()=>{
+    if(!yerForm.ad?.trim()||yerForm.lat==null||yerForm.lng==null){fpToast('Yer adı ve konumu gereklidir.');return;}
+    const n=yerForm.id?yerler.map(y=>y.id===yerForm.id?yerForm:y):[...yerler,{...yerForm,id:uid(),yaricapM:yerForm.yaricapM||300,aktif:true}];
+    LS.set('konumYerleri',n);setYerler(n);setYerModal(false);
+  };
+  const yerSil=async(id)=>{if(!(await fpConfirm('Bu yer silinsin mi?')))return;const n=yerler.filter(y=>y.id!==id);LS.set('konumYerleri',n);setYerler(n);};
+  const buradanEkle=()=>{
+    if(!navigator.geolocation){fpToast('Konum desteklenmiyor.');return;}
+    navigator.geolocation.getCurrentPosition(
+      (pos)=>{setYerForm(f=>({...f,lat:pos.coords.latitude,lng:pos.coords.longitude}));fpToast('📍 Bu cihazın konumu alındı.');},
+      ()=>fpToast('Konum alınamadı.','error')
+    );
   };
 
   const zenginKonumlar=konumlar.map(k=>{
@@ -5215,12 +5333,26 @@ function CanliKonum(){
     return{...k,ad:kisi?.ad||'Bilinmiyor',dk};
   }).sort((a,b)=>a.dk-b.dk);
 
+  const bekleyenBildirimler=olaylar.filter(o=>!o.bildirimGonderildi).sort((a,b)=>b.zaman.localeCompare(a.zaman));
+  const sonOlaylar=[...olaylar].sort((a,b)=>b.zaman.localeCompare(a.zaman)).slice(0,10);
+  const olayAdi=(o)=>(o.tip==='personel'?personel:araclar).find(x=>x.id===o.hedefId)?.ad||'—';
+  const yerAdi=(o)=>yerler.find(y=>y.id===o.yerId)?.ad||'—';
+  const bildirimGonder=(o)=>{
+    const tel=getSettings().konumBildirimTel;
+    if(!tel){fpToast('Önce Ayarlar > Senkronizasyon bölümünden "Konum Bildirim Telefonu" tanımlayın.','error');return;}
+    const link=whatsappLinkOlustur(tel,`📍 ${olayAdi(o)}, "${yerAdi(o)}" konumuna ${o.olay==='giris'?'GİRİŞ':'ÇIKIŞ'} yaptı.\n${new Date(o.zaman).toLocaleString('tr-TR')}`);
+    if(link){window.open(link,'_blank');const n=olaylar.map(x=>x.id===o.id?{...x,bildirimGonderildi:true}:x);LS.set('konumOlaylari',n);setOlaylar(n);}
+  };
+
   return(<div>
-    {!backendVar&&<InfoBox color={C.yellow}>⚠️ Canlı takip birden fazla cihaz arasında veri paylaşımı gerektirir. Şu an <strong>Backend Senkronizasyonu</strong> aktif değil (Ayarlar &gt; Senkronizasyon), bu yüzden paylaşılan konum yalnızca bu cihazda görünür. Sahadaki personelin kendi telefonundan konum paylaşabilmesi için önce backend senkronunu kurup her cihazda giriş yapın.</InfoBox>}
+    {!backendVar&&<InfoBox color={C.yellow}>⚠️ Canlı takip birden fazla cihaz arasında veri paylaşımı gerektirir. Şu an <strong>Backend Senkronizasyonu</strong> aktif değil (Ayarlar &gt; Senkronizasyon), bu yüzden paylaşılan konum yalnızca bu cihazda görünür.</InfoBox>}
+    <div style={{display:'flex',justifyContent:'flex-end',marginBottom:14}}>
+      <button style={{...S.btn(C.red),fontWeight:700}} onClick={sosGonder} disabled={sosGonderiliyor}>{sosGonderiliyor?'⏳ Konum alınıyor...':'🆘 ACİL DURUM (SOS)'}</button>
+    </div>
     <div style={S.g3}>
       <StatCard color={C.green} value={zenginKonumlar.filter(k=>k.dk<5).length} label="Az Önce Güncellenen"/>
       <StatCard color={C.yellow} value={zenginKonumlar.filter(k=>k.dk>=5&&k.dk<30).length} label="5-30 Dk Önce"/>
-      <StatCard color={C.muted} value={zenginKonumlar.filter(k=>k.dk>=30).length} label="30 Dk+ / Bağlantısız"/>
+      <StatCard color={C.red} value={zenginKonumlar.filter(k=>k.hiz&&k.hiz*3.6>hizLimiti).length} label="Şu An Hız İhlali"/>
     </div>
     <div style={S.card}>
       <div style={S.secTitle}>📍 Bu Cihazdan Konum Paylaş</div>
@@ -5229,23 +5361,66 @@ function CanliKonum(){
         <div style={{minWidth:200,flex:1}}><FG label={kimlikTip==='personel'?'Personel':'Araç'}><select style={S.sel} disabled={paylasiliyor} value={kimlikId??''} onChange={e=>setKimlikId(idVal(e.target.value))}><option value="">— Seçiniz —</option>{kimlikSecenekleri.map(x=><option key={x.id} value={x.id}>{x.ad}</option>)}</select></FG></div>
         {!paylasiliyor?<button style={S.btn(C.green)} onClick={baslat}>📍 Paylaşımı Başlat</button>:<button style={S.btnR} onClick={durdur}>⏹ Durdur</button>}
       </div>
-      {paylasiliyor&&<div style={{marginTop:10,fontSize:12,color:C.green}}>🟢 Konumunuz paylaşılıyor…</div>}
+      {paylasiliyor&&<div style={{marginTop:10,fontSize:12,color:C.green}}>🟢 Konumunuz paylaşılıyor…{pilSeviyesi!=null?` · 🔋 %${pilSeviyesi}`:''}</div>}
       {hataMsg&&<div style={{marginTop:10,fontSize:12,color:C.red}}>{hataMsg}</div>}
     </div>
+    {bekleyenBildirimler.length>0&&<div style={{...S.card,marginTop:16}}>
+      <div style={S.secTitle}>🔔 Bildirim Kutusu ({bekleyenBildirimler.length})</div>
+      <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Bu giriş/çıkış olayları "Bildir" işaretli yerlerde gerçekleşti. WhatsApp otomatik gönderilemediği için (tarayıcı kısıtı), tek tıkla siz gönderebilirsiniz.</div>
+      {bekleyenBildirimler.slice(0,8).map(o=>(<div key={o.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:`1px solid ${C.border}22`}}>
+        <div style={{fontSize:13,color:C.text}}>{o.olay==='giris'?'📥':'📤'} <strong style={{color:C.white}}>{olayAdi(o)}</strong> — {yerAdi(o)} <span style={{color:C.muted,fontSize:11}}>({new Date(o.zaman).toLocaleTimeString('tr-TR')})</span></div>
+        <button style={S.btnO} onClick={()=>bildirimGonder(o)}>📲 Gönder</button>
+      </div>))}
+    </div>}
     <div style={{...S.card,padding:0,overflow:'hidden',marginTop:16}}>
       <div ref={mapRef} style={{width:'100%',height:440}}/>
     </div>
     <div style={{...S.card,marginTop:16}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:10}}>
+        <div style={S.secTitle}>🗺️ Yerler (Şantiye, Depo, Ofis vb.)</div>
+        <button style={S.btnO} onClick={()=>{setYerForm({bildir:false});setYerModal(true);}}>＋ Yer Ekle</button>
+      </div>
+      {yerler.length===0?<div style={{color:C.muted,fontSize:13,marginTop:10}}>Henüz tanımlı yer yok. Bir yer eklerseniz, personel/araçlar oraya girdiğinde/çıktığında otomatik kaydedilir.</div>:(
+        <table style={S.tbl}><thead><tr><th style={S.th}>Yer</th><th style={S.th}>Yarıçap</th><th style={S.th}>Bildirim</th><th style={S.th}></th></tr></thead>
+        <tbody>{yerler.map(y=>(<tr key={y.id}>
+          <td style={S.td}><strong style={{color:C.white}}>{y.ad}</strong></td>
+          <td style={S.td}>{y.yaricapM||300} m</td>
+          <td style={S.td}>{y.bildir?<span style={S.badge(C.green)}>Açık</span>:<span style={S.badge(C.muted)}>Kapalı</span>}</td>
+          <td style={S.td}><div style={{display:'flex',gap:5}}><button style={S.btnO} onClick={()=>{setYerForm(y);setYerModal(true);}}>✏️</button><button style={S.btnR} onClick={()=>yerSil(y.id)}>🗑</button></div></td>
+        </tr>))}</tbody></table>
+      )}
+    </div>
+    <div style={{...S.card,marginTop:16}}>
       <div style={S.secTitle}>📋 Son Bilinen Konumlar</div>
-      <table style={S.tbl}><thead><tr><th style={S.th}>Tip</th><th style={S.th}>Ad</th><th style={S.th}>Son Güncelleme</th><th style={S.th}>Hız</th><th style={S.th}></th></tr></thead>
-      <tbody>{zenginKonumlar.map(k=>(<tr key={k.id}>
+      <table style={S.tbl}><thead><tr><th style={S.th}>Tip</th><th style={S.th}>Ad</th><th style={S.th}>Son Güncelleme</th><th style={S.th}>Hız</th><th style={S.th}>Pil</th><th style={S.th}></th></tr></thead>
+      <tbody>{zenginKonumlar.map(k=>{const asiriHiz=k.hiz&&k.hiz*3.6>hizLimiti;return(<tr key={k.id}>
         <td style={S.td}>{k.tip==='personel'?'👤 Personel':'🚜 Araç'}</td>
         <td style={S.td}><strong style={{color:C.white}}>{k.ad}</strong></td>
         <td style={S.td}><span style={{color:k.dk<5?C.green:k.dk<30?C.yellow:C.muted}}>{k.dk<1?'az önce':`${k.dk} dk önce`}</span></td>
-        <td style={S.td}>{k.hiz?`${Math.round(k.hiz*3.6)} km/s`:'—'}</td>
-        <td style={S.td}><button style={S.btnO} onClick={()=>{const map=mapInstRef.current;if(map)map.setView([k.lat,k.lng],15);}}>🎯 Haritada Göster</button></td>
-      </tr>))}{zenginKonumlar.length===0&&<tr><td style={S.td} colSpan={5}><div style={{textAlign:'center',color:C.muted,padding:20}}>Henüz konum paylaşan personel/araç yok.</div></td></tr>}</tbody></table>
+        <td style={S.td}>{k.hiz?<span style={{color:asiriHiz?C.red:C.text,fontWeight:asiriHiz?700:400}}>{Math.round(k.hiz*3.6)} km/s{asiriHiz?' ⚠️':''}</span>:'—'}</td>
+        <td style={S.td}>{k.pil!=null?`🔋 %${k.pil}`:'—'}</td>
+        <td style={S.td}><div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+          <button style={S.btnO} onClick={()=>{const map=mapInstRef.current;if(map)map.setView([k.lat,k.lng],15);}}>🎯 Göster</button>
+          {k.tip==='personel'&&<button style={izGosterId===k.id?S.btn(C.blue):S.btnO} onClick={()=>setIzGosterId(izGosterId===k.id?null:k.id)}>🧭 {izGosterId===k.id?'İzi Gizle':'İz (24s)'}</button>}
+        </div></td>
+      </tr>);})}{zenginKonumlar.length===0&&<tr><td style={S.td} colSpan={6}><div style={{textAlign:'center',color:C.muted,padding:20}}>Henüz konum paylaşan personel/araç yok.</div></td></tr>}</tbody></table>
     </div>
+    {sonOlaylar.length>0&&<div style={{...S.card,marginTop:16}}>
+      <div style={S.secTitle}>🕒 Son Giriş/Çıkış Kayıtları</div>
+      <table style={S.tbl}><thead><tr><th style={S.th}>Kim</th><th style={S.th}>Yer</th><th style={S.th}>Olay</th><th style={S.th}>Zaman</th></tr></thead>
+      <tbody>{sonOlaylar.map(o=>(<tr key={o.id}><td style={S.td}>{olayAdi(o)}</td><td style={S.td}>{yerAdi(o)}</td><td style={S.td}>{o.olay==='giris'?<span style={S.badge(C.green)}>📥 Giriş</span>:<span style={S.badge(C.muted)}>📤 Çıkış</span>}</td><td style={S.td}>{new Date(o.zaman).toLocaleString('tr-TR')}</td></tr>))}</tbody></table>
+    </div>}
+    {yerModal&&(<Modal title={yerForm.id?'Yer Düzenle':'Yeni Yer Ekle'} onClose={()=>setYerModal(false)}>
+      <FG label="Yer Adı"><input style={S.inp} placeholder="Örn: Akhisar Şantiyesi" value={yerForm.ad||''} onChange={e=>setYerForm(f=>({...f,ad:e.target.value}))}/></FG>
+      <div style={S.g2}>
+        <FG label="Enlem (lat)"><input type="number" step="0.000001" style={S.inp} value={yerForm.lat??''} onChange={e=>setYerForm(f=>({...f,lat:+e.target.value}))}/></FG>
+        <FG label="Boylam (lng)"><input type="number" step="0.000001" style={S.inp} value={yerForm.lng??''} onChange={e=>setYerForm(f=>({...f,lng:+e.target.value}))}/></FG>
+      </div>
+      <button type="button" style={S.btnO} onClick={buradanEkle}>📍 Bu Cihazın Şu Anki Konumunu Kullan</button>
+      <div style={{marginTop:14}}><FG label="Yarıçap (metre)"><input type="number" style={S.inp} value={yerForm.yaricapM??300} onChange={e=>setYerForm(f=>({...f,yaricapM:+e.target.value}))}/></FG></div>
+      <label style={{display:'flex',alignItems:'center',gap:8,fontSize:13,color:C.text,cursor:'pointer',marginTop:12}}><input type="checkbox" checked={!!yerForm.bildir} onChange={e=>setYerForm(f=>({...f,bildir:e.target.checked}))}/> Giriş/çıkışta bildirim kutusuna ekle</label>
+      <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginTop:16}}><button style={S.btnO} onClick={()=>setYerModal(false)}>İptal</button><button style={S.btn()} onClick={yerKaydet}>Kaydet</button></div>
+    </Modal>)}
   </div>);
 }
 
@@ -5348,14 +5523,24 @@ Sadece değerlendirme paragrafını yaz, başlık veya madde işareti kullanma.`
   </div>);
 }
 
+// Canlı Konum ve Sürücü Değerlendirme aynı veriyi (GPS/konum) kullandığı için tek
+// sayfada, sekmeli olarak birleştirilmiştir.
+function KonumTakip(){
+  const [tab,setTab]=useState('konum');
+  return(<div>
+    <TabBar tabs={[['konum','📍 Canlı Konum'],['surucu','🚦 Sürücü Değerlendirme']]} active={tab} onChange={setTab}/>
+    {tab==='konum'&&<CanliKonumGorunumu/>}
+    {tab==='surucu'&&<SurucuDegerlendirme/>}
+  </div>);
+}
+
 // ── Pages Config ──────────────────────────────────────────────────────────────
 const PAGES=[
   {group:'',items:[
     {id:'dashboard',label:'Dashboard',icon:'📊',comp:Dashboard},
     {id:'isemri',label:'İş Emirleri',icon:'📌',comp:IsEmirleri},
     {id:'arac',label:'Araç Yönetimi',icon:'🚜',comp:AracYonetimi},
-    {id:'konum',label:'Canlı Konum',icon:'📍',comp:CanliKonum},
-    {id:'surucu',label:'Sürücü Değerlendirme',icon:'🚦',comp:SurucuDegerlendirme},
+    {id:'konum',label:'Konum & Sürücü Takip',icon:'📍',comp:KonumTakip},
     {id:'muhasebe',label:'Muhasebe',icon:'💰',comp:Muhasebe},
     {id:'ik',label:'İnsan Kaynakları',icon:'🧑‍💼',comp:InsanKaynaklari},
     {id:'gorevler',label:'Görevler',icon:'✅',comp:Gorevler},
@@ -5377,7 +5562,7 @@ const ESKI_SAYFA_YONLENDIRME={bakim:'arac',yakit:'arac',evrak:'arac',hasar:'arac
 const ROL_TANIMLARI = {
   admin:    {renkKey:'red',    label:'Admin',     aciklama:'Tüm modüllere tam erişim.',                                  sayfalar:'*'},
   muhasebe: {renkKey:'purple', label:'Muhasebe',  aciklama:'Gelir-gider, fatura, kasa-banka ve ilgili raporlar.',        sayfalar:['dashboard','muhasebe','arac','proje','depo','bekciler','ayarlar']},
-  sef:      {renkKey:'blue',   label:'Şef',       aciklama:'Araç, bakım, iş emirleri, personel ve saha yönetimi.',       sayfalar:['dashboard','arac','konum','surucu','isemri','gorevler','ik','depo','bekciler']},
+  sef:      {renkKey:'blue',   label:'Şef',       aciklama:'Araç, bakım, iş emirleri, personel ve saha yönetimi.',       sayfalar:['dashboard','arac','konum','isemri','gorevler','ik','depo','bekciler']},
   operator: {renkKey:'green',  label:'Operatör',  aciklama:'Sadece saha girişleri ve temel görünüm.',                    sayfalar:['dashboard','arac','konum','akaryakit','gorevler']},
 };
 const rolRenk=(rol)=>C[ROL_TANIMLARI[rol]?.renkKey]||C.muted;
