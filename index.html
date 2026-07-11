@@ -3536,11 +3536,22 @@ ${gecmis}
         {AI_ORNEK_KOMUTLAR.map(ornek=>(<button key={ornek} style={{...S.btnO,fontSize:11,padding:'5px 10px'}} onClick={()=>sohbetGonder(ornek)} disabled={sohbetYukleniyor}>{ornek}</button>))}
       </div>
       <div style={{display:'flex',gap:8,alignItems:'center'}}>
-        <button style={{...S.btn(dinleniyor?C.red:C.blue),padding:'10px 14px',fontSize:16,flexShrink:0,animation:dinleniyor?'fpPulse 1.2s ease-in-out infinite':'none'}} onClick={()=>dinleniyor?durdurDinleme():baslatDinleme()} title="Bas Konuş — sesli komut">{dinleniyor?'🔴':'🎤'}</button>
         <input style={{...S.inp,flex:1}} placeholder="Mesaj yazın veya 🎤 ile konuşun…" value={girdi} onChange={e=>setGirdi(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')sohbetGonder();}}/>
         <button style={S.btn()} onClick={()=>sohbetGonder()} disabled={sohbetYukleniyor||!girdi.trim()}>Gönder</button>
       </div>
-      <div style={{fontSize:11,color:C.muted,marginTop:8}}>🎤 <strong>Bas Konuş:</strong> Chrome/Edge tarayıcılarında çalışır. Konuşmanız metne çevrilir; veri girişi komutlarında kayıt sisteme işlenmeden önce onayınıza sunulur.</div>
+      <div style={{fontSize:11,color:C.muted,marginTop:8}}>🎤 <strong>Bas Konuş:</strong> sağ alttaki mikrofon balonuna basın. Chrome/Edge tarayıcılarında çalışır. Konuşmanız metne çevrilir; veri girişi komutlarında kayıt sisteme işlenmeden önce onayınıza sunulur.</div>
+      <button
+        style={{
+          position:'fixed',right:24,bottom:24,zIndex:60,
+          width:60,height:60,borderRadius:'50%',border:'none',
+          background:dinleniyor?C.red:C.accent,color:'#fff',fontSize:26,
+          display:'flex',alignItems:'center',justifyContent:'center',
+          boxShadow:'0 4px 16px rgba(0,0,0,.35)',cursor:'pointer',
+          animation:dinleniyor?'fpPulse 1.2s ease-in-out infinite':'none',
+        }}
+        onClick={()=>dinleniyor?durdurDinleme():baslatDinleme()}
+        title="Bas Konuş — sesli komut"
+      >{dinleniyor?'🔴':'🎤'}</button>
     </div>)}
 
     {tab==='ariza'&&(<div style={S.card}><div style={S.secTitle}>🔮 Arıza Öngörüsü & Bakım Zamanı</div><div style={{fontSize:13,color:C.muted,marginBottom:16}}>Bakım geçmişi, çalışma saatleri ve yakıt tüketim verileri analiz edilir.</div><button style={S.btn(C.purple)} onClick={arizaTahmini} disabled={yukleniyor}>{yukleniyor?'⏳ Analiz yapılıyor...':'🔮 Arıza Tahmini Yap'}</button>{analiz&&<div style={{marginTop:16,background:C.input,borderRadius:10,padding:16,fontSize:13,color:C.text,lineHeight:1.7,whiteSpace:'pre-wrap',borderLeft:`3px solid ${C.purple}`}}>{analiz}</div>}</div>)}
