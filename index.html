@@ -5487,38 +5487,38 @@ Sadece değerlendirme paragrafını yaz, başlık veya madde işareti kullanma.`
       <StatCard color={C.yellow} value={siralanmis.reduce((s,x)=>s+x.metrik.ihlaller,0)} label="Toplam Hız İhlali (30 gün)"/>
       <StatCard color={siralanmis.length?renkSkor(Math.round(siralanmis.reduce((s,x)=>s+x.skor,0)/siralanmis.length)):C.muted} value={siralanmis.length?Math.round(siralanmis.reduce((s,x)=>s+x.skor,0)/siralanmis.length):'—'} label="Ortalama Filo Skoru"/>
     </div>
-    <div style={S.g2}>
-      <div style={S.card}>
-        <div style={S.secTitle}>🚦 Sürücü Sıralaması</div>
-        <table style={S.tbl}><thead><tr><th style={S.th}>Personel</th><th style={S.th}>Skor</th><th style={S.th}>Mesafe</th><th style={S.th}>İhlal</th><th style={S.th}></th></tr></thead>
-        <tbody>{siralanmis.map(s=>(<tr key={s.p.id} style={{cursor:'pointer',background:secili===s.p.id?`${C.accent}11`:'transparent'}} onClick={()=>{setSecili(s.p.id);setAiRapor('');setAiHata('');}}>
-          <td style={S.td}><strong style={{color:C.white}}>{s.p.ad}</strong><div style={{fontSize:11,color:C.muted}}>{s.p.pozisyon||'—'}</div></td>
-          <td style={S.td}><span style={{...S.badge(renkSkor(s.skor)),fontWeight:700}}>{s.skor}</span></td>
-          <td style={S.td}>{s.metrik.mesafeKm.toFixed(0)} km</td>
-          <td style={S.td}>{s.metrik.ihlaller>0?<span style={{color:C.red}}>{s.metrik.ihlaller}</span>:'0'}</td>
-          <td style={S.td}><button style={S.btnO} onClick={(e)=>{e.stopPropagation();setSecili(s.p.id);setAiRapor('');setAiHata('');}}>Detay →</button></td>
-        </tr>))}{siralanmis.length===0&&<tr><td style={S.td} colSpan={5}><div style={{textAlign:'center',color:C.muted,padding:20}}>Aktif personel yok.</div></td></tr>}</tbody></table>
-      </div>
-      <div style={S.card}>
-        <div style={S.secTitle}>📈 {seciliVeri?`${seciliVeri.p.ad} — Günlük Maks. Hız`:'Detay için soldan bir personel seçin'}</div>
-        {!seciliVeri?<div style={{color:C.muted,fontSize:13}}>—</div>:(<>
-          <div style={S.g3}>
-            <StatCard color={renkSkor(seciliVeri.skor)} value={seciliVeri.skor} label="Sürücü Skoru"/>
-            <StatCard color={C.blue} value={`${seciliVeri.metrik.ortalamaHiz.toFixed(0)} km/s`} label="Ortalama Hız"/>
-            <StatCard color={seciliVeri.metrik.ihlaller>0?C.red:C.green} value={seciliVeri.metrik.ihlaller} label="Hız İhlali"/>
-          </div>
-          {!hasRC?<div style={{color:C.muted,fontSize:13}}>Grafik kütüphanesi yüklenemedi.</div>:gunlukMaksHiz.length===0?<div style={{color:C.muted,fontSize:13,marginTop:10}}>Henüz konum geçmişi verisi yok.</div>:(
-            <ResponsiveContainer width="100%" height={180}>
-              <LineChart data={gunlukMaksHiz}><CartesianGrid strokeDasharray="3 3" stroke={C.border}/><XAxis dataKey="gun" tick={{fill:C.muted,fontSize:10}}/><YAxis tick={{fill:C.muted,fontSize:10}}/><Tooltip contentStyle={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,fontSize:12}} formatter={v=>`${v} km/s`}/><Line type="monotone" dataKey="hiz" stroke={C.accent} strokeWidth={2} dot={{r:3}}/></LineChart>
-            </ResponsiveContainer>
-          )}
-          <div style={{marginTop:16,paddingTop:16,borderTop:`1px solid ${C.border}`}}>
-            <button style={S.btn()} onClick={aiDegerlendirmeIste} disabled={aiYukleniyor}>{aiYukleniyor?'⏳ Analiz ediliyor...':'🤖 AI Değerlendirme Raporu Oluştur'}</button>
-            {aiHata&&<div style={{...S.alert(C.red),marginTop:10}}>⚠️ {aiHata}</div>}
-            {aiRapor&&<div style={{...S.alert(C.blue),marginTop:10,lineHeight:1.6}}>{aiRapor}</div>}
-          </div>
-        </>)}
-      </div>
+    <div style={S.card}>
+      <div style={S.secTitle}>🚦 Sürücü Sıralaması</div>
+      <table style={S.tbl}><thead><tr><th style={S.th}>Personel</th><th style={S.th}>Skor</th><th style={S.th}>Mesafe (30g)</th><th style={S.th}>Ortalama Hız</th><th style={S.th}>Maks. Hız</th><th style={S.th}>Hız İhlali</th><th style={S.th}></th></tr></thead>
+      <tbody>{siralanmis.map(s=>(<tr key={s.p.id} style={{cursor:'pointer',background:secili===s.p.id?`${C.accent}11`:'transparent'}} onClick={()=>{setSecili(s.p.id);setAiRapor('');setAiHata('');}}>
+        <td style={S.td}><strong style={{color:C.white}}>{s.p.ad}</strong><div style={{fontSize:11,color:C.muted}}>{s.p.pozisyon||'—'}</div></td>
+        <td style={S.td}><span style={{...S.badge(renkSkor(s.skor)),fontWeight:700}}>{s.skor}</span></td>
+        <td style={S.td}>{s.metrik.mesafeKm.toFixed(0)} km</td>
+        <td style={S.td}>{s.metrik.ortalamaHiz.toFixed(0)} km/s</td>
+        <td style={S.td}>{s.metrik.maksHiz.toFixed(0)} km/s</td>
+        <td style={S.td}>{s.metrik.ihlaller>0?<span style={{color:C.red,fontWeight:700}}>{s.metrik.ihlaller}</span>:'0'}</td>
+        <td style={S.td}><button style={S.btnO} onClick={(e)=>{e.stopPropagation();setSecili(s.p.id);setAiRapor('');setAiHata('');}}>Detay →</button></td>
+      </tr>))}{siralanmis.length===0&&<tr><td style={S.td} colSpan={7}><div style={{textAlign:'center',color:C.muted,padding:20}}>Aktif personel yok.</div></td></tr>}</tbody></table>
+    </div>
+    <div style={{...S.card,marginTop:16}}>
+      <div style={S.secTitle}>📈 {seciliVeri?`${seciliVeri.p.ad} — Günlük Maks. Hız`:'Detay için yukarıdan bir personel seçin'}</div>
+      {!seciliVeri?<div style={{color:C.muted,fontSize:13}}>—</div>:(<>
+        <div style={S.g3}>
+          <StatCard color={renkSkor(seciliVeri.skor)} value={seciliVeri.skor} label="Sürücü Skoru"/>
+          <StatCard color={C.blue} value={`${seciliVeri.metrik.ortalamaHiz.toFixed(0)} km/s`} label="Ortalama Hız"/>
+          <StatCard color={seciliVeri.metrik.ihlaller>0?C.red:C.green} value={seciliVeri.metrik.ihlaller} label="Hız İhlali"/>
+        </div>
+        {!hasRC?<div style={{color:C.muted,fontSize:13}}>Grafik kütüphanesi yüklenemedi.</div>:gunlukMaksHiz.length===0?<div style={{color:C.muted,fontSize:13,marginTop:10}}>Henüz konum geçmişi verisi yok.</div>:(
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={gunlukMaksHiz}><CartesianGrid strokeDasharray="3 3" stroke={C.border}/><XAxis dataKey="gun" tick={{fill:C.muted,fontSize:10}}/><YAxis tick={{fill:C.muted,fontSize:10}}/><Tooltip contentStyle={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,fontSize:12}} formatter={v=>`${v} km/s`}/><Line type="monotone" dataKey="hiz" stroke={C.accent} strokeWidth={2} dot={{r:3}}/></LineChart>
+          </ResponsiveContainer>
+        )}
+        <div style={{marginTop:16,paddingTop:16,borderTop:`1px solid ${C.border}`}}>
+          <button style={S.btn()} onClick={aiDegerlendirmeIste} disabled={aiYukleniyor}>{aiYukleniyor?'⏳ Analiz ediliyor...':'🤖 AI Değerlendirme Raporu Oluştur'}</button>
+          {aiHata&&<div style={{...S.alert(C.red),marginTop:10}}>⚠️ {aiHata}</div>}
+          {aiRapor&&<div style={{...S.alert(C.blue),marginTop:10,lineHeight:1.6}}>{aiRapor}</div>}
+        </div>
+      </>)}
     </div>
   </div>);
 }
