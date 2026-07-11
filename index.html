@@ -295,6 +295,14 @@ function countPending(dirty){let c=0;if(dirty.settings)c++;if(dirty.records){Obj
 // bir sonraki senkronda sadece bu değişen/silinen satırlar sunucuya gönderilir.
 const _origLSSet=LS.set;
 LS.set=(k,v)=>{
+  // Salt okunur kullanıcı: gerçek iş verisi tablolarına yazma engellenir (tek merkezi
+  // kontrol noktası — bu sayede her formda/butonda ayrı ayrı kontrol gerekmez).
+  // 'ayarlar' bilinçli olarak İSTİSNA: aksi halde salt okunur kullanıcı aktif kullanıcı
+  // değiştirip modu kendi kendine kapatamaz, cihazda kilitli kalır.
+  if(k!=='ayarlar'&&typeof ALL_DATA_KEYS!=='undefined'&&ALL_DATA_KEYS.includes(k)&&aktifKullaniciSaltOkunurMu()){
+    fpToast('🔒 Salt okunur modda değişiklik yapamazsınız.','error');
+    return;
+  }
   const cfg=getSyncCfg();
   if(!cfg.token){
     _origLSSet(k,v);
@@ -375,10 +383,59 @@ async function fpSyncLogin(url,username,password){
   });
   const data=await res.json().catch(()=>({}));
   if(!res.ok)throw new Error(data.error||'Giriş başarısız.');
+  if(data.requires2FA){return{requires2FA:true,tempToken:data.tempToken,url:cleanUrl,username:username.trim().toLowerCase()};}
   setSyncCfg({url:cleanUrl,token:data.token,username:username.trim().toLowerCase(),companyName:data.companyName,role:data.role});
   setSyncMeta({updatedAt:{},lastPull:0});
   setDirtyRecords({records:{},settings:null});
   _emitSyncStatus({state:'bagli',error:null,pending:0,lastSync:null});
+  return data;
+}
+
+// Giriş sırasında istenen 2FA kodunu doğrulayıp oturumu tamamlar.
+async function fpSync2FALoginVerify(url,username,tempToken,code){
+  const res=await fetch(`${url}/api/auth/2fa/login-verify`,{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({tempToken,code})
+  });
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(data.error||'Kod doğrulanamadı.');
+  setSyncCfg({url,token:data.token,username,companyName:data.companyName,role:data.role});
+  setSyncMeta({updatedAt:{},lastPull:0});
+  setDirtyRecords({records:{},settings:null});
+  _emitSyncStatus({state:'bagli',error:null,pending:0,lastSync:null});
+  return data;
+}
+
+async function fp2FADurum(){
+  const cfg=getSyncCfg();
+  if(!cfg.token||!cfg.url)throw new Error('Önce sunucuya bağlanmalısınız.');
+  const res=await fetch(`${cfg.url}/api/auth/2fa/status`,{headers:{'Authorization':`Bearer ${cfg.token}`}});
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(data.error||'Durum alınamadı.');
+  return data;
+}
+async function fp2FAKurulumBaslat(){
+  const cfg=getSyncCfg();
+  if(!cfg.token||!cfg.url)throw new Error('Önce sunucuya bağlanmalısınız.');
+  const res=await fetch(`${cfg.url}/api/auth/2fa/setup`,{method:'POST',headers:{'Authorization':`Bearer ${cfg.token}`}});
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(data.error||'Kurulum başlatılamadı.');
+  return data;
+}
+async function fp2FAKurulumDogrula(code){
+  const cfg=getSyncCfg();
+  if(!cfg.token||!cfg.url)throw new Error('Önce sunucuya bağlanmalısınız.');
+  const res=await fetch(`${cfg.url}/api/auth/2fa/verify-setup`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${cfg.token}`},body:JSON.stringify({code})});
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(data.error||'Kod doğrulanamadı.');
+  return data;
+}
+async function fp2FAKapat(code){
+  const cfg=getSyncCfg();
+  if(!cfg.token||!cfg.url)throw new Error('Önce sunucuya bağlanmalısınız.');
+  const res=await fetch(`${cfg.url}/api/auth/2fa/disable`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${cfg.token}`},body:JSON.stringify({code})});
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(data.error||'Kapatılamadı.');
   return data;
 }
 
@@ -4491,6 +4548,83 @@ function PushBildirimAyarlari(){
 }
 
 
+function Sunucu2FAAyarlari(){
+  const bagli=!!getSyncCfg().token;
+  const [durum,setDurum]=useState(null);
+  const [yukleniyor,setYukleniyor]=useState(true);
+  const [kurulum,setKurulum]=useState(null); // {secret,otpauthUrl}
+  const [kod,setKod]=useState('');
+  const [islemde,setIslemde]=useState(false);
+  const [hata,setHata]=useState('');
+
+  const yukle=async()=>{
+    if(!bagli){setYukleniyor(false);return;}
+    setYukleniyor(true);
+    try{setDurum(await fp2FADurum());}catch{setDurum(null);}
+    finally{setYukleniyor(false);}
+  };
+  useEffect(()=>{yukle();},[bagli]);
+
+  const kurulumuBaslat=async()=>{
+    setHata('');setIslemde(true);
+    try{setKurulum(await fp2FAKurulumBaslat());}
+    catch(e){setHata(e.message);}
+    finally{setIslemde(false);}
+  };
+  const kurulumuDogrula=async(e)=>{
+    e.preventDefault();
+    setHata('');setIslemde(true);
+    try{
+      await fp2FAKurulumDogrula(kod);
+      fpToast('✅ İki faktörlü doğrulama etkinleştirildi.');
+      setKurulum(null);setKod('');await yukle();
+    }catch(e){setHata(e.message);}
+    finally{setIslemde(false);}
+  };
+  const kapat=async(e)=>{
+    e.preventDefault();
+    setHata('');setIslemde(true);
+    try{
+      await fp2FAKapat(kod);
+      fpToast('İki faktörlü doğrulama kapatıldı.');
+      setKod('');await yukle();
+    }catch(e){setHata(e.message);}
+    finally{setIslemde(false);}
+  };
+
+  return(<div style={S.card}>
+    <div style={S.secTitle}>🔐 İki Faktörlü Doğrulama (2FA) — Sunucu Hesabı</div>
+    <div style={{fontSize:13,color:C.muted,marginBottom:14,lineHeight:1.6}}>Google Authenticator, Microsoft Authenticator veya Authy gibi bir uygulamayla, sunucuya giriş yaparken şifreye ek olarak 6 haneli bir kod istenmesini sağlar. Bu, yukarıdaki cihaz kilidinden farklıdır — hesabınızın sunucu tarafındaki gerçek girişini korur.</div>
+    {!bagli?(
+      <InfoBox color={C.blue}>ℹ️ Önce Ayarlar &gt; Senkronizasyon'dan sunucuya bağlanmalısınız.</InfoBox>
+    ):yukleniyor?(
+      <div style={{fontSize:13,color:C.muted}}>Yükleniyor…</div>
+    ):(<>
+      <div style={{marginBottom:14}}><span style={S.badge(durum?.enabled?C.green:C.muted)}>{durum?.enabled?'✓ Aktif':'Kapalı'}</span></div>
+      {hata&&<div style={{...S.alert(C.red),marginBottom:12}}>⚠️ {hata}</div>}
+      {durum?.enabled?(
+        <form onSubmit={kapat}>
+          <FG label="Kapatmak için authenticator kodunuzu girin"><input style={{...S.inp,maxWidth:200,letterSpacing:2}} inputMode="numeric" maxLength={6} placeholder="000000" value={kod} onChange={e=>setKod(e.target.value.replace(/\D/g,''))}/></FG>
+          <button type="submit" style={S.btnR} disabled={islemde||kod.length!==6}>{islemde?'⏳...':'2FA\'yı Kapat'}</button>
+        </form>
+      ):kurulum?(
+        <form onSubmit={kurulumuDogrula}>
+          <div style={{fontSize:12,color:C.text,marginBottom:8}}>1. Authenticator uygulamanızda "Manuel giriş / Kurulum anahtarı" seçeneğini kullanın, hesap adı olarak <strong>FiloPro</strong> yazıp aşağıdaki anahtarı girin:</div>
+          <div style={{background:C.input,borderRadius:8,padding:'10px 14px',fontFamily:'monospace',fontSize:15,letterSpacing:1,color:C.accent,marginBottom:14,wordBreak:'break-all'}}>{kurulum.secret}</div>
+          <div style={{fontSize:12,color:C.text,marginBottom:8}}>2. Uygulamada beliren 6 haneli kodu girip doğrulayın:</div>
+          <FG label="Doğrulama Kodu"><input style={{...S.inp,maxWidth:200,letterSpacing:2}} inputMode="numeric" maxLength={6} placeholder="000000" value={kod} onChange={e=>setKod(e.target.value.replace(/\D/g,''))} autoFocus/></FG>
+          <div style={{display:'flex',gap:10}}>
+            <button type="button" style={S.btnO} onClick={()=>{setKurulum(null);setKod('');setHata('');}}>İptal</button>
+            <button type="submit" style={S.btn()} disabled={islemde||kod.length!==6}>{islemde?'⏳ Doğrulanıyor...':'✓ Doğrula ve Etkinleştir'}</button>
+          </div>
+        </form>
+      ):(
+        <button style={S.btn()} onClick={kurulumuBaslat} disabled={islemde}>{islemde?'⏳...':'🔐 2FA\'yı Etkinleştir'}</button>
+      )}
+    </>)}
+  </div>);
+}
+
 function SenkronPaneli(){
   const cfg=getSyncCfg();
   const [status,setStatus]=useState(fpSyncStatus());
@@ -4501,6 +4635,8 @@ function SenkronPaneli(){
   const [sifre,setSifre]=useState('');
   const [islemde,setIslemde]=useState(false);
   const [hata,setHata]=useState('');
+  const [iki2FABekleniyor,setIki2FABekleniyor]=useState(null); // {url,username,tempToken}
+  const [kod2FA,setKod2FA]=useState('');
   useEffect(()=>fpSyncSubscribe(setStatus),[]);
 
   const gonder=async(e)=>{
@@ -4511,12 +4647,30 @@ function SenkronPaneli(){
         await fpSyncRegister(url,firma,kadi,sifre);
         fpToast('✅ Şirket kaydı oluşturuldu, senkronizasyon başlatılıyor.');
       }else{
-        await fpSyncLogin(url,kadi,sifre);
+        const sonuc=await fpSyncLogin(url,kadi,sifre);
+        if(sonuc.requires2FA){
+          setIki2FABekleniyor(sonuc);
+          setIslemde(false);
+          return;
+        }
         fpToast('✅ Sunucuya bağlanıldı, senkronizasyon başlatılıyor.');
       }
       setSifre('');
     }catch(err){
       setHata(err.message||'İşlem başarısız.');
+    }finally{
+      setIslemde(false);
+    }
+  };
+  const dogrula2FA=async(e)=>{
+    e.preventDefault();
+    setHata('');setIslemde(true);
+    try{
+      await fpSync2FALoginVerify(iki2FABekleniyor.url,iki2FABekleniyor.username,iki2FABekleniyor.tempToken,kod2FA);
+      fpToast('✅ Sunucuya bağlanıldı, senkronizasyon başlatılıyor.');
+      setSifre('');setKod2FA('');setIki2FABekleniyor(null);
+    }catch(err){
+      setHata(err.message||'Kod doğrulanamadı.');
     }finally{
       setIslemde(false);
     }
@@ -4533,6 +4687,17 @@ function SenkronPaneli(){
         <div style={S.secTitle}>☁️ Cihazlar Arası Senkronizasyon</div>
         <div style={{fontSize:13,color:C.muted,marginBottom:16,lineHeight:1.6}}>Bir FiloPro senkronizasyon sunucusuna bağlanarak verilerinizi birden fazla cihaz ve ekip üyesi arasında (JWT ile korumalı) otomatik olarak senkronize edin. Her şirketin verisi diğerlerinden tamamen izoledir. Bağlanmadan da uygulama, veriler yalnızca bu cihazda saklanarak normal şekilde çalışmaya devam eder.</div>
         {!bagli?(
+          iki2FABekleniyor?(
+            <form onSubmit={dogrula2FA}>
+              <InfoBox color={C.blue}>🔐 Bu hesapta iki faktörlü doğrulama (2FA) aktif. Authenticator uygulamanızdaki 6 haneli kodu girin.</InfoBox>
+              <FG label="Doğrulama Kodu"><input style={{...S.inp,fontSize:20,letterSpacing:4,textAlign:'center'}} inputMode="numeric" maxLength={6} placeholder="000000" value={kod2FA} onChange={e=>setKod2FA(e.target.value.replace(/\D/g,''))} autoFocus required/></FG>
+              {hata&&<div style={{...S.alert(C.red),marginBottom:12}}>⚠️ {hata}</div>}
+              <div style={{display:'flex',gap:10}}>
+                <button type="button" style={S.btnO} onClick={()=>{setIki2FABekleniyor(null);setKod2FA('');setHata('');}}>← Geri</button>
+                <button type="submit" style={{...S.btn(),flex:1}} disabled={islemde||kod2FA.length!==6}>{islemde?'⏳ Doğrulanıyor...':'✓ Doğrula ve Bağlan'}</button>
+              </div>
+            </form>
+          ):(
           <div>
             <div style={{display:'flex',gap:8,marginBottom:16}}>
               <button onClick={()=>setMod('giris')} style={{...S.btn(mod==='giris'?C.accent:C.muted),flex:1}}>Giriş Yap</button>
@@ -4550,6 +4715,7 @@ function SenkronPaneli(){
               {mod==='kayit'&&<div style={{fontSize:12,color:C.muted,marginTop:10}}>Bu, yeni ve boş bir şirket veri alanı oluşturur; girdiğiniz kullanıcı otomatik olarak yönetici olur. Daha sonra ekip üyelerinizi ekleyebilirsiniz.</div>}
             </form>
           </div>
+          )
         ):(
           <div>
             <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14,flexWrap:'wrap'}}>
@@ -4949,6 +5115,7 @@ function Ayarlar(){
         </FG>
         <button style={S.btnO} onClick={simdiKilitle}>🔒 Uygulamayı Şimdi Kilitle</button>
       </div>)}
+      <Sunucu2FAAyarlari/>
       <div style={S.card}>
         <div style={S.secTitle}>👥 Kullanıcılar ve Roller</div>
         <div style={{fontSize:13,color:C.muted,marginBottom:12}}>Kullanıcı ekleme, rol atama ve işlem logları için Kullanıcı & Yetki modülünü kullanın.</div>
@@ -6016,13 +6183,24 @@ const ESKI_SAYFA_YONLENDIRME={bakim:'arac',yakit:'arac',evrak:'arac',hasar:'arac
 // ── Rol Tabanlı Yetkilendirme (RBAC) ──────────────────────────────────────────
 // sayfalar: '*' → tüm sayfalara erişim; aksi halde erişilebilir sayfa id'lerinin listesi.
 const ROL_TANIMLARI = {
-  admin:    {renkKey:'red',    label:'Admin',     aciklama:'Tüm modüllere tam erişim.',                                  sayfalar:'*'},
-  muhasebe: {renkKey:'purple', label:'Muhasebe',  aciklama:'Gelir-gider, fatura, kasa-banka ve ilgili raporlar.',        sayfalar:['dashboard','muhasebe','arac','proje','depo','bekciler','ayarlar']},
-  sef:      {renkKey:'blue',   label:'Şef',       aciklama:'Araç, bakım, iş emirleri, personel ve saha yönetimi.',       sayfalar:['dashboard','arac','konum','isemri','gorevler','ik','depo','bekciler']},
-  operator: {renkKey:'green',  label:'Operatör',  aciklama:'Sadece saha girişleri ve temel görünüm.',                    sayfalar:['dashboard','arac','konum','akaryakit','gorevler']},
+  admin:      {renkKey:'red',    label:'Admin',        aciklama:'Tüm modüllere tam erişim.',                                  sayfalar:'*'},
+  muhasebe:   {renkKey:'purple', label:'Muhasebe',     aciklama:'Gelir-gider, fatura, kasa-banka ve ilgili raporlar.',        sayfalar:['dashboard','muhasebe','arac','proje','depo','bekciler','ayarlar']},
+  sef:        {renkKey:'blue',   label:'Şef',          aciklama:'Araç, bakım, iş emirleri, personel ve saha yönetimi.',       sayfalar:['dashboard','arac','konum','isemri','gorevler','ik','depo','bekciler']},
+  operator:   {renkKey:'green',  label:'Operatör',     aciklama:'Sadece saha girişleri ve temel görünüm.',                    sayfalar:['dashboard','arac','konum','akaryakit','gorevler']},
+  saltokunur: {renkKey:'muted',  label:'Salt Okunur',  aciklama:'Her şeyi görebilir, hiçbir veriyi ekleyemez/düzenleyemez/silemez. Muhasebeci, yatırımcı veya denetçiye erişim vermek için idealdir.', sayfalar:'*'},
 };
 const rolRenk=(rol)=>C[ROL_TANIMLARI[rol]?.renkKey]||C.muted;
 const rolSayfalari=(rol)=>{const r=ROL_TANIMLARI[rol];if(!r)return null;return r.sayfalar==='*'?null:new Set(r.sayfalar);};
+// Aktif (yerel) kullanıcının salt okunur olup olmadığını döndürür. Uygulama kilitliyken
+// veya henüz bir aktif kullanıcı seçilmemişken false döner (varsayılan olarak engellemez).
+const aktifKullaniciSaltOkunurMu=()=>{
+  try{
+    const st=getSettings();
+    const kullanicilar=JSON.parse(localStorage.getItem('kullanicilar')||'[]');
+    const aktif=kullanicilar.find(k=>k.id===st.aktifKullaniciId);
+    return aktif?.rol==='saltokunur';
+  }catch{return false;}
+};
 
 // ── App ───────────────────────────────────────────────────────────────────────
 function App(){
