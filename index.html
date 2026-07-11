@@ -1795,10 +1795,11 @@ function YakitYonetimi(){
   const araclar=LS.get('araclar');
   const [yakitlar,setYakitlar]=useState(LS.get('yakitlar')),[modal,setModal]=useState(false),[form,setForm]=useState({}),[err,setErr]=useState('');
   const save=()=>{
-    const hata=validate(form,{aracId:[f=>!!f.aracId,'Araç seçimi zorunludur.'],miktar:[f=>+f.miktar>0,'Miktar 0\'dan büyük olmalıdır.'],fiyat:[f=>+f.fiyat>0,'Litre fiyatı 0\'dan büyük olmalıdır.']});
+    const hata=validate(form,{toplamFiyat:[f=>+f.toplamFiyat>0,'Toplam fiyat 0\'dan büyük olmalıdır.'],fiyat:[f=>+f.fiyat>0,'Litre fiyatı 0\'dan büyük olmalıdır.'],aracId:[f=>!!f.aracId,'Araç seçimi zorunludur.']});
     if(hata){setErr(hata);return;}
     setErr('');
-    const toplam=(+form.miktar||0)*(+form.fiyat||0);const n=form.id?yakitlar.map(y=>y.id===form.id?{...form,toplam}:y):[...yakitlar,{...form,id:uid(),toplam,tarih:form.tarih||today()}];LS.set('yakitlar',n);setYakitlar(n);setModal(false);
+    const toplam=+form.toplamFiyat||0;const fiyat=+form.fiyat||0;const miktar=fiyat>0?Math.round((toplam/fiyat)*100)/100:0;
+    const n=form.id?yakitlar.map(y=>y.id===form.id?{...form,miktar,toplam}:y):[...yakitlar,{...form,id:uid(),miktar,toplam,tarih:form.tarih||today()}];LS.set('yakitlar',n);setYakitlar(n);setModal(false);
   };
   const del=async(id)=>{if(!(await fpConfirm('Bu ikmal kaydı silinsin mi?')))return;const n=yakitlar.filter(y=>y.id!==id);LS.set('yakitlar',n);setYakitlar(n);};
   const buAyToplam=yakitlar.filter(y=>y.tarih?.startsWith(today().slice(0,7))).reduce((s,y)=>s+(+y.toplam||0),0);
@@ -1812,12 +1813,12 @@ function YakitYonetimi(){
       <button style={S.btn()} onClick={()=>{setForm({tarih:today(),fiyat:getSettings().varsayilanYakitFiyat||''});setErr('');setModal(true);}}>＋ İkmal Ekle</button>
     </div>
     <div style={S.card}><table style={S.tbl}><thead><tr><th style={S.th}>Araç</th><th style={S.th}>Tarih</th><th style={S.th}>Miktar</th><th style={S.th}>Birim Fiyat</th><th style={S.th}>Toplam</th><th style={S.th}>Depo</th><th style={S.th}></th></tr></thead>
-    <tbody>{[...yakitlar].sort((a,b)=>b.tarih?.localeCompare(a.tarih)).map(y=>{const a=araclar.find(x=>x.id===y.aracId);return(<tr key={y.id}><td style={S.td}><strong style={{color:C.white}}>{a?.ad||'—'}</strong></td><td style={S.td}>{fmtDate(y.tarih)}</td><td style={S.td}>{y.miktar} Lt</td><td style={S.td}>{fmtTL(y.fiyat)}</td><td style={S.td}><strong style={{color:C.accent}}>{fmtTL(y.toplam)}</strong></td><td style={S.td}>{y.depo}</td><td style={S.td}><div style={{display:'flex',gap:5}}><button style={S.btnO} onClick={()=>{setForm(y);setErr('');setModal(true);}}>✏️</button><button style={S.btnR} onClick={()=>del(y.id)}>🗑</button></div></td></tr>);})}</tbody></table></div>
+    <tbody>{[...yakitlar].sort((a,b)=>b.tarih?.localeCompare(a.tarih)).map(y=>{const a=araclar.find(x=>x.id===y.aracId);return(<tr key={y.id}><td style={S.td}><strong style={{color:C.white}}>{a?.ad||'—'}</strong></td><td style={S.td}>{fmtDate(y.tarih)}</td><td style={S.td}>{y.miktar} Lt</td><td style={S.td}>{fmtTL(y.fiyat)}</td><td style={S.td}><strong style={{color:C.accent}}>{fmtTL(y.toplam)}</strong></td><td style={S.td}>{y.depo}</td><td style={S.td}><div style={{display:'flex',gap:5}}><button style={S.btnO} onClick={()=>{setForm({...y,toplamFiyat:y.toplam});setErr('');setModal(true);}}>✏️</button><button style={S.btnR} onClick={()=>del(y.id)}>🗑</button></div></td></tr>);})}</tbody></table></div>
     {modal&&(<Modal title={form.id?'İkmal Düzenle':'Yeni İkmal'} onClose={()=>setModal(false)}>
       <FG label="Araç"><select style={S.sel} value={form.aracId||''} onChange={e=>setForm(f=>({...f,aracId:idVal(e.target.value)}))}><option value="">— Seçiniz —</option>{araclar.map(a=><option key={a.id} value={a.id}>{a.ad}</option>)}</select></FG>
       <div style={S.g2}><FG label="Tarih"><input type="date" style={S.inp} value={form.tarih||''} onChange={e=>setForm(f=>({...f,tarih:e.target.value}))}/></FG><FG label="Depo / Pompa"><input style={S.inp} value={form.depo||''} onChange={e=>setForm(f=>({...f,depo:e.target.value}))}/></FG></div>
-      <div style={S.g2}><FG label="Miktar (Lt)"><input type="number" style={S.inp} value={form.miktar||''} onChange={e=>setForm(f=>({...f,miktar:+e.target.value}))}/></FG><FG label="Litre Fiyatı (₺)"><input type="number" step="0.01" style={S.inp} value={form.fiyat||''} onChange={e=>setForm(f=>({...f,fiyat:+e.target.value}))}/></FG></div>
-      {form.miktar&&form.fiyat&&<div style={S.alert(C.green)}>Toplam: <strong>{fmtTL(form.miktar*form.fiyat)}</strong></div>}
+      <div style={S.g2}><FG label="Toplam Fiyat (₺)"><input type="number" step="0.01" style={S.inp} value={form.toplamFiyat??''} onChange={e=>setForm(f=>({...f,toplamFiyat:+e.target.value}))}/></FG><FG label="Litre Fiyatı (₺)"><input type="number" step="0.01" style={S.inp} value={form.fiyat||''} onChange={e=>setForm(f=>({...f,fiyat:+e.target.value}))}/></FG></div>
+      {form.toplamFiyat>0&&form.fiyat>0&&<div style={S.alert(C.green)}>Hesaplanan Miktar: <strong>{(Math.round((form.toplamFiyat/form.fiyat)*100)/100).toLocaleString('tr-TR')} Lt</strong></div>}
       <FormError msg={err}/>
       <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginTop:8}}><button style={S.btnO} onClick={()=>setModal(false)}>İptal</button><button style={S.btn()} onClick={save}>Kaydet</button></div>
     </Modal>)}
@@ -2860,7 +2861,7 @@ function AkaryakitIstasyonu(){
   const [modal,setModal]=useState(false),[limitModal,setLimitModal]=useState(false),[form,setForm]=useState({}),[lForm,setLForm]=useState({});
   const varsayilanFiyat=getSettings().varsayilanYakitFiyat||0;
   const saveLimit=()=>{const n=limitler.some(l=>l.aracId===lForm.aracId)?limitler.map(l=>l.aracId===lForm.aracId?lForm:l):[...limitler,{...lForm,id:uid()}];LS.set('yakitLimitler',n);setLimitler(n);setLimitModal(false);};
-  const kaydet=()=>{const fiyat=+form.fiyat||varsayilanFiyat||0;const n=[...ikmaller,{...form,id:uid(),tarih:today(),fiyat,onaylı:true}];LS.set('otomatikIkmaller',n);setIkmaller(n);const yk=LS.get('yakitlar');LS.set('yakitlar',[...yk,{id:uid(),aracId:form.aracId,personelId:form.personelId??null,tarih:today(),miktar:+form.miktar,fiyat,toplam:+form.miktar*fiyat,depo:form.kart||'Pompa'}]);setModal(false);};
+  const kaydet=()=>{const fiyat=+form.fiyat||varsayilanFiyat||0;const toplam=+form.toplamFiyat||0;const miktar=fiyat>0?Math.round((toplam/fiyat)*100)/100:0;const n=[...ikmaller,{...form,id:uid(),tarih:today(),fiyat,miktar,toplam,onaylı:true}];LS.set('otomatikIkmaller',n);setIkmaller(n);const yk=LS.get('yakitlar');LS.set('yakitlar',[...yk,{id:uid(),aracId:form.aracId,personelId:form.personelId??null,tarih:today(),miktar,fiyat,toplam,depo:form.kart||'Pompa'}]);setModal(false);};
   const onayla=(id)=>{const n=ikmaller.map(x=>x.id===id?{...x,onaylı:true}:x);LS.set('otomatikIkmaller',n);setIkmaller(n);};
   const iptal=(id)=>{const n=ikmaller.filter(x=>x.id!==id);LS.set('otomatikIkmaller',n);setIkmaller(n);};
   const limitAsimi=araclar.filter(a=>{const lim=limitler.find(l=>l.aracId===a.id);if(!lim)return false;const bugun=ikmaller.filter(x=>x.aracId===a.id&&x.tarih===today()).reduce((s,x)=>s+(+x.miktar||0),0);return lim.gunluk>0&&bugun>lim.gunluk;}).length;
@@ -2877,8 +2878,8 @@ function AkaryakitIstasyonu(){
       <FG label="Araç"><select style={S.sel} value={form.aracId??''} onChange={e=>setForm(f=>({...f,aracId:idVal(e.target.value)}))}><option value="">— Seçiniz —</option>{araclar.map(a=><option key={a.id} value={a.id}>{a.ad}</option>)}</select></FG>
       <FG label="Personel"><select style={S.sel} value={form.personelId??''} onChange={e=>setForm(f=>({...f,personelId:idVal(e.target.value)}))}><option value="">— Seçiniz —</option>{personel.map(p=><option key={p.id} value={p.id}>{p.ad}</option>)}</select></FG>
       <FG label="Kart No"><input style={S.inp} value={form.kart||''} onChange={e=>setForm(f=>({...f,kart:e.target.value}))}/></FG>
-      <div style={S.g2}><FG label="Miktar (Lt)"><input type="number" style={S.inp} value={form.miktar||''} onChange={e=>setForm(f=>({...f,miktar:+e.target.value}))}/></FG><FG label="Litre Fiyatı (₺)"><input type="number" step="0.01" style={S.inp} value={form.fiyat||''} placeholder={varsayilanFiyat?String(varsayilanFiyat):''} onChange={e=>setForm(f=>({...f,fiyat:+e.target.value}))}/></FG></div>
-      {form.miktar>0&&(form.fiyat>0||varsayilanFiyat>0)&&<div style={S.alert(C.green)}>Toplam: <strong>{fmtTL(+form.miktar*(+form.fiyat||varsayilanFiyat))}</strong></div>}
+      <div style={S.g2}><FG label="Toplam Fiyat (₺)"><input type="number" step="0.01" style={S.inp} value={form.toplamFiyat??''} onChange={e=>setForm(f=>({...f,toplamFiyat:+e.target.value}))}/></FG><FG label="Litre Fiyatı (₺)"><input type="number" step="0.01" style={S.inp} value={form.fiyat||''} placeholder={varsayilanFiyat?String(varsayilanFiyat):''} onChange={e=>setForm(f=>({...f,fiyat:+e.target.value}))}/></FG></div>
+      {form.toplamFiyat>0&&(form.fiyat>0||varsayilanFiyat>0)&&<div style={S.alert(C.green)}>Hesaplanan Miktar: <strong>{(Math.round((form.toplamFiyat/(form.fiyat||varsayilanFiyat))*100)/100).toLocaleString('tr-TR')} Lt</strong></div>}
       <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginTop:8}}><button style={S.btnO} onClick={()=>setModal(false)}>İptal</button><button style={S.btn()} onClick={kaydet}>Kaydet</button></div>
     </Modal>)}
     {limitModal&&(<Modal title="Limit Belirle" onClose={()=>setLimitModal(false)}>
