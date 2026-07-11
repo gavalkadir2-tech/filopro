@@ -20,6 +20,7 @@ const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 const cron = require('node-cron');
 const webpush = require('web-push');
+const { authenticator } = require('otplib');
 
 const app = express();
 app.use(cors());
@@ -166,6 +167,9 @@ function rateLimit(bucket, max) {
 function signToken(user) {
   return jwt.sign({ sub: user.username, tenantId: user.tenantId, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
 }
+function signTempToken(user) {
+  return jwt.sign({ sub: user.username, tenantId: user.tenantId, role: user.role, pending2FA: true }, JWT_SECRET, { expiresIn: '5m' });
+}
 
 app.get('/api/health', (req, res) => res.json({ ok: true, time: Date.now() }));
 
@@ -210,8 +214,83 @@ app.post('/api/auth/login', rateLimit('login', 15), async (req, res) => {
   if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
     return res.status(401).json({ error: 'Kullanıcı adı veya şifre hatalı.' });
   }
+  if (user.twoFactorEnabled) {
+    return res.json({ requires2FA: true, tempToken: signTempToken(user) });
+  }
   res.json({ token: signToken(user), companyName: user.companyName, role: user.role });
 });
+
+// Giriş sırasında istenen TOTP kodunu doğrulayıp asıl (kalıcı) token'ı verir.
+app.post('/api/auth/2fa/login-verify', rateLimit('login', 15), (req, res) => {
+  const { tempToken, code } = req.body || {};
+  if (!tempToken || !code) return res.status(400).json({ error: 'Geçici token ve kod gerekli.' });
+  let payload;
+  try {
+    payload = jwt.verify(tempToken, JWT_SECRET);
+  } catch {
+    return res.status(401).json({ error: 'Oturum süresi doldu, tekrar giriş yapın.' });
+  }
+  if (!payload.pending2FA) return res.status(400).json({ error: 'Geçersiz istek.' });
+  const users = readUsers();
+  const user = users.find((u) => u.username === payload.sub);
+  if (!user || !user.twoFactorEnabled) return res.status(400).json({ error: '2FA bu kullanıcı için aktif değil.' });
+  if (!authenticator.check(String(code).trim(), user.twoFactorSecret)) {
+    return res.status(401).json({ error: 'Kod hatalı veya süresi doldu.' });
+  }
+  res.json({ token: signToken(user), companyName: user.companyName, role: user.role });
+});
+
+// ── İki Faktörlü Doğrulama (2FA) Kurulumu ───────────────────────────────────────
+// 1) setup: yeni bir gizli anahtar üretir (henüz AKTİF etmez, sadece "bekleyen" olarak saklar).
+// 2) verify-setup: kullanıcı authenticator uygulamasından okuduğu ilk kodu girer; doğruysa 2FA açılır.
+// 3) disable: geçerli bir kod ile 2FA'yı kapatır.
+app.post('/api/auth/2fa/setup', authMiddleware, (req, res) => {
+  const users = readUsers();
+  const user = users.find((u) => u.username === req.user.sub);
+  if (!user) return res.status(404).json({ error: 'Kullanıcı bulunamadı.' });
+  const secret = authenticator.generateSecret();
+  user.pendingTwoFactorSecret = secret;
+  writeUsers(users);
+  const otpauthUrl = authenticator.keyuri(user.username, 'FiloPro', secret);
+  res.json({ secret, otpauthUrl });
+});
+
+app.post('/api/auth/2fa/verify-setup', authMiddleware, rateLimit('2fa-verify', 10), (req, res) => {
+  const { code } = req.body || {};
+  const users = readUsers();
+  const user = users.find((u) => u.username === req.user.sub);
+  if (!user || !user.pendingTwoFactorSecret) return res.status(400).json({ error: 'Önce kurulum başlatılmalı.' });
+  if (!code || !authenticator.check(String(code).trim(), user.pendingTwoFactorSecret)) {
+    return res.status(401).json({ error: 'Kod hatalı. Authenticator uygulamanızdaki güncel 6 haneli kodu girin.' });
+  }
+  user.twoFactorSecret = user.pendingTwoFactorSecret;
+  user.twoFactorEnabled = true;
+  delete user.pendingTwoFactorSecret;
+  writeUsers(users);
+  res.json({ ok: true });
+});
+
+app.post('/api/auth/2fa/disable', authMiddleware, rateLimit('2fa-disable', 10), (req, res) => {
+  const { code } = req.body || {};
+  const users = readUsers();
+  const user = users.find((u) => u.username === req.user.sub);
+  if (!user || !user.twoFactorEnabled) return res.status(400).json({ error: '2FA zaten aktif değil.' });
+  if (!code || !authenticator.check(String(code).trim(), user.twoFactorSecret)) {
+    return res.status(401).json({ error: 'Kod hatalı.' });
+  }
+  user.twoFactorEnabled = false;
+  delete user.twoFactorSecret;
+  delete user.pendingTwoFactorSecret;
+  writeUsers(users);
+  res.json({ ok: true });
+});
+
+app.get('/api/auth/2fa/status', authMiddleware, (req, res) => {
+  const users = readUsers();
+  const user = users.find((u) => u.username === req.user.sub);
+  res.json({ enabled: !!(user && user.twoFactorEnabled) });
+});
+
 
 // ── Ekip yönetimi (sadece admin) ────────────────────────────────────────────────
 // Aynı şirkete (tenant) yeni bir kullanıcı ekler.

@@ -162,10 +162,34 @@ bir `sw.js` (service worker) dosyası bulunması gerekir. Bu proje daha önce
 bu dosyayı içermiyordu; eklenen `sw.js` dosyasını index.html'inizle aynı
 dizine (repo kökü) koyduğunuzdan emin olun.
 
+## İki Faktörlü Doğrulama (2FA)
+
+Ek kurulum **gerektirmez** — otplib (TOTP) sunucuya dahildir. Ayarlar →
+Güvenlik → "İki Faktörlü Doğrulama (2FA) — Sunucu Hesabı" bölümünden her
+kullanıcı kendi hesabı için ayrı ayrı açabilir: Google Authenticator,
+Microsoft Authenticator veya Authy gibi bir uygulamayla kurulum anahtarını
+manuel girip 6 haneli kodu doğrular. Açıldıktan sonra sunucuya her girişte
+şifreye ek olarak bu kod istenir.
+
+Bu, Ayarlar → Güvenlik'teki "Şifreli Giriş Ekranı" (cihaz kilidi) ile
+**karıştırılmamalıdır** — o sadece bu cihazdaki uygulamayı kilitler, 2FA ise
+sunucudaki gerçek hesap girişini korur.
+
+## Salt Okunur Rolü
+
+Kullanıcı & Yetki modülünde artık bir **"Salt Okunur"** rolü var — muhasebeci,
+yatırımcı veya denetçi gibi birine, hiçbir veriyi değiştiremeyeceği ama her
+şeyi görebileceği bir erişim vermek için. Bu rol, uygulamanın tüm veri
+yazma işlemlerinin geçtiği tek bir merkezi noktada (`LS.set`) engellenir —
+yani tek tek her ekran/buton için ayrı bir kısıtlama yazılmasına gerek
+kalmadan, **hiçbir modülde** (araç, personel, fatura, iş emri, vb.) ekleme/
+düzenleme/silme yapılamaz; sadece görüntüleme, arama ve dışa aktarma (Excel/
+PDF) çalışır.
+
 ## Mimari Notlar
 
 - `data/users.json` — tüm kullanıcılar (hangi şirkete ait, rolü, bcrypt ile
-  hash'lenmiş şifresi).
+  hash'lenmiş şifresi, 2FA sırrı varsa).
 - `data/tenants/<tenantId>.json` — o şirkete ait tüm FiloPro tabloları
   (araçlar, bakımlar, personel, vb.).
 - `data/tenants/<tenantId>.backup.json` — o şirketin yedek e-postası ayarı.
