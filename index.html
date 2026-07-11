@@ -478,6 +478,54 @@ async function fpBackupSendNow(){
   return data;
 }
 
+// Base64url VAPID genel anahtarını, pushManager.subscribe()'ın beklediği Uint8Array'e çevirir.
+function urlBase64ToUint8Array(base64String){
+  const padding='='.repeat((4-base64String.length%4)%4);
+  const base64=(base64String+padding).replace(/-/g,'+').replace(/_/g,'/');
+  const raw=window.atob(base64);
+  return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)));
+}
+async function fpPushDurum(){
+  if(!('serviceWorker' in navigator)||!('PushManager' in window))return{destekleniyor:false};
+  const kayit=await navigator.serviceWorker.ready;
+  const abonelik=await kayit.pushManager.getSubscription();
+  return{destekleniyor:true,abone:!!abonelik,izin:Notification.permission};
+}
+async function fpPushAbolOl(){
+  const cfg=getSyncCfg();
+  if(!cfg.token||!cfg.url)throw new Error('Önce sunucuya bağlanmalısınız.');
+  if(!('serviceWorker' in navigator)||!('PushManager' in window))throw new Error('Bu tarayıcı push bildirimlerini desteklemiyor.');
+  const izin=await Notification.requestPermission();
+  if(izin!=='granted')throw new Error('Bildirim izni verilmedi.');
+  const anahtarRes=await fetch(`${cfg.url}/api/push/vapid-public-key`);
+  const anahtarData=await anahtarRes.json().catch(()=>({}));
+  if(!anahtarRes.ok)throw new Error(anahtarData.error||'Sunucuda push bildirimleri yapılandırılmamış.');
+  const kayit=await navigator.serviceWorker.ready;
+  const abonelik=await kayit.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(anahtarData.publicKey)});
+  const res=await fetch(`${cfg.url}/api/push/subscribe`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${cfg.token}`},body:JSON.stringify({subscription:abonelik.toJSON()})});
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(data.error||'Abonelik kaydedilemedi.');
+  return data;
+}
+async function fpPushIptalEt(){
+  const cfg=getSyncCfg();
+  const kayit=await navigator.serviceWorker.ready;
+  const abonelik=await kayit.pushManager.getSubscription();
+  if(abonelik){
+    const endpoint=abonelik.endpoint;
+    await abonelik.unsubscribe();
+    if(cfg.token&&cfg.url)await fetch(`${cfg.url}/api/push/unsubscribe`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${cfg.token}`},body:JSON.stringify({endpoint})}).catch(()=>{});
+  }
+}
+async function fpPushTestGonder(){
+  const cfg=getSyncCfg();
+  if(!cfg.token||!cfg.url)throw new Error('Önce sunucuya bağlanmalısınız.');
+  const res=await fetch(`${cfg.url}/api/push/test`,{method:'POST',headers:{'Authorization':`Bearer ${cfg.token}`}});
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(data.error||'Test bildirimi gönderilemedi.');
+  return data;
+}
+
 function fpSyncLogout(){
   setSyncCfg({});
   setSyncMeta({});
@@ -653,7 +701,7 @@ function SyncBadge(){
 // ── Settings ─────────────────────────────────────────────────────────────────
 const DEFAULT_SETTINGS={
   firmaAdi:'FiloPro A.Ş.', firmaAdres:'Akhisar, Manisa', firmaTel:'0532 000 0000', firmaVergiNo:'', firmaVergiDaire:'',
-  paraBirimi:'₺', tarihFormati:'gg.aa.yyyy', kdvOrani:20, varsayilanYakitFiyat:44, hizLimitiKmh:90, acilDurumTel:'', konumBildirimTel:'',
+  paraBirimi:'₺', tarihFormati:'gg.aa.yyyy', kdvOrani:20, varsayilanYakitFiyat:44, hizLimitiKmh:90, acilDurumTel:'', konumBildirimTel:'', amortismanOmurYil:8,
   esikKritikGun:7, esikUyariGun:30, opBelgeEsikGun:60,
   bildirimEmail:true, bildirimSms:true, bildirimSistem:true,
   vardiyaBaslangic:'07:30', vardiyaBitis:'17:30',
@@ -679,7 +727,7 @@ const DEFAULT_SETTINGS={
   backendApiUrl:'', backendApiKey:'',
 };
 const ACCENT_MAP={amber:'#f59e0b',blue:'#3b82f6',green:'#22c55e',purple:'#a855f7',red:'#ef4444',teal:'#14b8a6'};
-const ALL_DATA_KEYS=['araclar','personel','departmanlar','izinler','mesailer','egitimler','adaylar','degerlendirmeler','isGuvenligiOlaylari','bordroEkKalemler','bordroArsiv','bakimlar','yakitlar','hasarlar','parcalar','isemirleri','gorevler','projeler','hesaplar','gelirGider','faturalar','kasaHareketleri','cariler','pompalar','yakitLimitler','otomatikIkmaller','sahaCalisma','sahaAriza','konumlar','konumGecmisi','konumYerleri','konumOlaylari','bildirimTercih','kullanicilar','islemLoglari','erpBaglantilar','erpAktarimlar','depolar','envanterKalemleri','stokHareketleri','bekciKopekleri','kopekAsilari','kopekSaglikKayitlari','kopekMasraflari','telegramMasrafBildirimleri','ayarlar'];
+const ALL_DATA_KEYS=['araclar','personel','departmanlar','izinler','mesailer','egitimler','adaylar','degerlendirmeler','isGuvenligiOlaylari','bordroEkKalemler','bordroArsiv','bakimlar','yakitlar','hasarlar','parcalar','isemirleri','gorevler','projeler','hesaplar','gelirGider','faturalar','kasaHareketleri','cariler','butceler','tekrarlananFaturalar','pompalar','yakitLimitler','otomatikIkmaller','sahaCalisma','sahaAriza','konumlar','konumGecmisi','konumYerleri','konumOlaylari','bildirimTercih','kullanicilar','islemLoglari','erpBaglantilar','erpAktarimlar','depolar','envanterKalemleri','stokHareketleri','bekciKopekleri','kopekAsilari','kopekSaglikKayitlari','kopekMasraflari','telegramMasrafBildirimleri','ayarlar'];
 // modulDurumu iç içe (nested) birleştirilir; aksi halde kullanıcı ayar kaydettikten
 // sonra eklenen yeni bir modül varsayılan olarak gizli kalabilirdi.
 const getSettings=()=>{
@@ -733,6 +781,38 @@ const sonrakiFaturaNo=(tur,mevcutFaturalar)=>{
   return `${onEk}-${today().slice(0,7)}-${String(sayac).padStart(3,'0')}`;
 };
 const thisMonth=()=>new Date().toISOString().slice(0,7);
+// Bir tarihe periyoda göre (aylık/3 aylık/yıllık) ekleme yapar (YYYY-MM-DD döner).
+const tarihIlerlet=(tarihStr,periyot)=>{
+  const d=new Date(tarihStr+'T00:00:00');
+  if(periyot==='yillik')d.setFullYear(d.getFullYear()+1);
+  else if(periyot==='3ay')d.setMonth(d.getMonth()+3);
+  else d.setMonth(d.getMonth()+1); // aylik (varsayılan)
+  return d.toISOString().slice(0,10);
+};
+// Vadesi gelmiş (sonrakiTarih <= bugün) tüm aktif tekrarlayan fatura şablonlarından
+// gerçek fatura kayıtları üretir. Uygulama uzun süre açılmamışsa birikmiş dönemleri de
+// (en fazla 24 tekrar, sonsuz döngüye karşı) yakalar. Şablonun sonrakiTarih'ini ilerletir.
+function tekrarlananFaturalariUret(){
+  const sablonlar=LS.get('tekrarlananFaturalar')||[];
+  if(!sablonlar.some(s=>s.aktif!==false))return{uretilen:0};
+  let faturalar=LS.get('faturalar');
+  let uretilen=0;
+  const guncelSablonlar=sablonlar.map(s=>{
+    if(s.aktif===false||!s.sonrakiTarih)return s;
+    let sonraki=s.sonrakiTarih,tur=0;
+    while(sonraki<=today()&&tur<24){
+      const kdvTutari=Math.round((+s.tutar||0)*(s.kdvOran??20))/100;
+      const yeni={id:uid(),tur:s.tur,musteriId:s.tur==='kesilen'?s.cariId:null,tedarikciId:s.tur==='alinan'?s.cariId:null,tarih:sonraki,vadeTarih:addDays(sonraki,s.vadeGun??30),tutar:+s.tutar||0,kdv:kdvTutari,toplam:(+s.tutar||0)+kdvTutari,aciklama:`${s.aciklama||'Tekrarlayan fatura'} (otomatik)`,no:sonrakiFaturaNo(s.tur,faturalar),tekrarSablonId:s.id};
+      faturalar=[...faturalar,yeni];
+      uretilen++;
+      sonraki=tarihIlerlet(sonraki,s.periyot);
+      tur++;
+    }
+    return{...s,sonrakiTarih:sonraki};
+  });
+  if(uretilen>0){LS.set('faturalar',faturalar);LS.set('tekrarlananFaturalar',guncelSablonlar);}
+  return{uretilen};
+}
 const daysLeft=d=>d?Math.ceil((new Date(d)-new Date())/86400000):9999;
 const fmtDate=d=>{if(!d)return'—';const dt=new Date(d);if(isNaN(dt))return'—';const fmt=getSettings().tarihFormati;if(fmt==='yyyy-aa-gg')return dt.toISOString().slice(0,10);return dt.toLocaleDateString('tr-TR');};
 const fmtMonth=(ym)=>{if(!ym)return'—';const[y,m]=ym.split('-');return new Date(y,m-1).toLocaleDateString('tr-TR',{month:'long',year:'numeric'});};
@@ -1078,6 +1158,53 @@ const printInvoice=(f,hareketler)=>{
   try{printHTMLDoc(buildInvoiceHTML(f,hareketler));}
   catch(e){fpToast('Fatura yazdırılamadı: '+(e?.message||'bilinmeyen hata'));}
 };
+
+// Genel amaçlı, yeniden kullanılabilir PDF/yazdırılabilir rapor oluşturucu. Gerçek bir PDF
+// kütüphanesi kullanmaz — tarayıcının kendi "Yazdır → PDF olarak kaydet" özelliğine dayanır,
+// bu yüzden ek bağımlılık gerektirmez ve her tarayıcıda güvenilir çalışır.
+// opts: {baslik, altBaslik, ozetKartlari:[{label,value}], headers:[...], rows:[[...]], notlar}
+const buildReportHTML=(opts)=>{
+  const s=getSettings();
+  const {baslik,altBaslik,ozetKartlari,headers,rows,notlar}=opts;
+  return `<!DOCTYPE html><html lang="tr"><head><meta charset="UTF-8"><title>${baslik}</title>
+<style>
+  *{box-sizing:border-box;}
+  body{font-family:Arial,Helvetica,sans-serif;padding:40px;color:#111;max-width:1000px;margin:0 auto;}
+  .head{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #f59e0b;padding-bottom:16px;margin-bottom:24px;}
+  .firma{font-size:18px;font-weight:800;}
+  .muted{color:#666;font-size:13px;margin-top:2px;}
+  h1{font-size:24px;margin:0 0 6px;}
+  .ozet{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:24px;}
+  .ozet div{border:1px solid #ddd;border-radius:8px;padding:12px 18px;flex:1;min-width:140px;}
+  .ozet .v{font-size:19px;font-weight:800;}
+  .ozet .l{font-size:11px;color:#666;margin-top:2px;}
+  table{width:100%;border-collapse:collapse;margin-top:10px;}
+  th,td{border:1px solid #ddd;padding:8px 10px;text-align:left;font-size:12px;}
+  th{background:#f5f5f5;}
+  .altbilgi{margin-top:24px;font-size:11px;color:#888;border-top:1px solid #eee;padding-top:10px;}
+  @media print{body{padding:15px;}}
+</style></head><body>
+<div class="head">
+  <div>
+    <div class="firma">${s.firmaAdi||'FiloPro'}</div>
+    <div class="muted">${s.firmaAdres||''}</div>
+  </div>
+  <div style="text-align:right;">
+    <h1>${baslik}</h1>
+    ${altBaslik?`<div class="muted">${altBaslik}</div>`:''}
+  </div>
+</div>
+${(ozetKartlari&&ozetKartlari.length)?`<div class="ozet">${ozetKartlari.map(o=>`<div><div class="v">${o.value}</div><div class="l">${o.label}</div></div>`).join('')}</div>`:''}
+<table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead>
+<tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${c==null?'':c}</td>`).join('')}</tr>`).join('')}</tbody></table>
+${notlar?`<div class="muted" style="margin-top:14px;font-size:11px;">${notlar}</div>`:''}
+<div class="altbilgi">Oluşturulma: ${new Date().toLocaleString('tr-TR')} — FiloPro</div>
+</body></html>`;
+};
+const printReport=(opts)=>{
+  try{printHTMLDoc(buildReportHTML(opts));}
+  catch(e){fpToast('Rapor oluşturulamadı: '+(e?.message||'bilinmeyen hata'));}
+};
 function recordHareket({hesapId,tur,tutar,tarih,aciklama,kategori,musteriId,tedarikciId,personelId,faturaId,yontem}){
   const hareketler=LS.get('kasaHareketleri');
   const pre=kategori==='tahsilat'?'TAH':kategori==='odeme'?'ODE':'KH';
@@ -1380,7 +1507,7 @@ function migrateSahaServisTipleriEkle(){
 
 // ── Ortak Uyarı Hesaplama (Dashboard + Bildirim Zili) ─────────────────────────
 function getSistemUyarilari(){
-  const araclar=LS.get('araclar'),bakimlar=LS.get('bakimlar'),isemirleri=LS.get('isemirleri'),faturalar=LS.get('faturalar'),hareketler=LS.get('kasaHareketleri');
+  const araclar=LS.get('araclar'),bakimlar=LS.get('bakimlar'),isemirleri=LS.get('isemirleri'),faturalar=LS.get('faturalar'),hareketler=LS.get('kasaHareketleri'),gelirGider=LS.get('gelirGider');
   const eK=esikKritik(),eU=esikUyari(),bakimSaatEsik=getSettings().bakimSaatUyariEsigi??50,bakimKmEsik=getSettings().bakimKmUyariEsigi??500;
   const list=[];
   araclar.forEach(a=>{
@@ -1393,6 +1520,16 @@ function getSistemUyarilari(){
   bakimlar.filter(b=>b.durum==='bekliyor').forEach(b=>{const a=araclar.find(x=>x.id===b.aracId);list.push({tip:'Bakım',baslik:`${a?.ad||'—'} — ${b.tur||'bakım'} bekliyor`,gun:daysLeft(b.tarih),c:C.yellow,icon:'🔧'});});
   isemirleri.filter(i=>i.durum!=='tamamlandi'&&i.oncelik==='acil').forEach(i=>{list.push({tip:'İş Emri',baslik:`${i.baslik} (acil)`,gun:daysLeft(i.tarih),c:C.red,icon:'📌'});});
   (faturalar||[]).forEach(f=>{if(faturaDurum(f,hareketler)==='vadesiGecti')list.push({tip:'Fatura',baslik:`${cariAd(f)} — vadesi geçti`,gun:daysLeft(f.vadeTarih),c:C.red,icon:'💸'});});
+  (LS.get('envanterKalemleri')||[]).forEach(k=>{
+    if(k.minMiktar!=null&&(+k.miktar||0)<=(+k.minMiktar||0)){
+      const tukendi=(+k.miktar||0)<=0;
+      list.push({tip:'Stok',baslik:`${k.ad} — ${tukendi?'stok tükendi':`kritik seviyede (${k.miktar} ${k.birim||'adet'} kaldı)`}`,gun:tukendi?-1:0,c:tukendi?C.red:C.yellow,icon:'📦'});
+    }
+  });
+  (LS.get('butceler')||[]).forEach(b=>{
+    const harcanan=gelirGider.filter(g=>g.tur==='gider'&&g.kategori===b.kategori&&g.tarih?.startsWith(thisMonth())).reduce((s,g)=>s+(+g.tutar||0),0);
+    if(harcanan>b.aylikLimit)list.push({tip:'Bütçe',baslik:`${b.kategori} — bütçe aşıldı (${fmtTL(harcanan)}/${fmtTL(b.aylikLimit)})`,gun:-1,c:C.red,icon:'🎯'});
+  });
   return list.sort((a,b)=>a.gun-b.gun);
 }
 
@@ -2832,16 +2969,65 @@ function Gorevler(){
 }
 
 function ProjeYonetimi(){
-  const araclar=LS.get('araclar'),yakitlar=LS.get('yakitlar'),bakimlar=LS.get('bakimlar'),gelirGider=LS.get('gelirGider'),personel=LS.get('personel');
+  const araclar=LS.get('araclar'),yakitlar=LS.get('yakitlar'),bakimlar=LS.get('bakimlar'),gelirGider=LS.get('gelirGider'),personel=LS.get('personel'),faturalar=LS.get('faturalar');
   const [projeler,setProjeler]=useState(LS.get('projeler')),[modal,setModal]=useState(false),[form,setForm]=useState({});
   const save=()=>{const n=form.id?projeler.map(p=>p.id===form.id?form:p):[...projeler,{...form,id:uid(),durum:form.durum||'aktif'}];LS.set('projeler',n);setProjeler(n);setModal(false);};
   const del=(id)=>{const n=projeler.filter(p=>p.id!==id);LS.set('projeler',n);setProjeler(n);};
+  const hasRC=!!RC.BarChart;
+  // Her proje için kârlılık bileşenlerini hesaplar. Çifte sayım riskini önlemek için
+  // gelir tek kaynaktan (Gelir/Gider muhasebe kayıtları) alınır; kesilen fatura toplamı
+  // ayrıca bilgi amaçlı gösterilir (aynı tutarın iki kez sayılmaması için net kâra dahil edilmez).
+  const kârlılık=(p)=>{
+    const prjAraclar=araclar.filter(a=>a.projeId===p.id);
+    const prjAracIdler=prjAraclar.map(a=>a.id);
+    const muhasebeGelir=gelirGider.filter(g=>g.tur==='gelir'&&g.projeId===p.id).reduce((s,g)=>s+(+g.tutar||0),0);
+    const muhasebeGiderDiger=gelirGider.filter(g=>g.tur==='gider'&&g.projeId===p.id).reduce((s,g)=>s+(+g.tutar||0),0);
+    const yakitGider=yakitlar.filter(y=>prjAracIdler.includes(y.aracId)).reduce((s,y)=>s+(+y.toplam||0),0);
+    const bakimGider=bakimlar.filter(b=>prjAracIdler.includes(b.aracId)&&b.durum==='tamamlandi').reduce((s,b)=>s+(+b.maliyet||0),0);
+    const faturaToplami=faturalar.filter(f=>f.tur==='kesilen'&&f.projeId===p.id).reduce((s,f)=>s+(+f.toplam||0),0);
+    const prjPersonel=personel.filter(per=>prjAraclar.some(a=>a.opId===per.id));
+    const personelMaliyeti=prjPersonel.reduce((s,per)=>s+(+per.maas||0),0);
+    const toplamGider=yakitGider+bakimGider+muhasebeGiderDiger;
+    const netKar=muhasebeGelir-toplamGider;
+    const karMarji=muhasebeGelir>0?(netKar/muhasebeGelir)*100:null;
+    return{prjAraclar,prjPersonel,muhasebeGelir,muhasebeGiderDiger,yakitGider,bakimGider,faturaToplami,personelMaliyeti,toplamGider,netKar,karMarji};
+  };
+  const tumKarlar=projeler.map(p=>({ad:p.ad,net:kârlılık(p).netKar}));
   return(<div>
-    <div style={{display:'flex',justifyContent:'flex-end',marginBottom:14}}><button style={S.btn()} onClick={()=>{setForm({durum:'aktif'});setModal(true);}}>＋ Proje Ekle</button></div>
-    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(300px,1fr))',gap:16}}>
-      {projeler.map(p=>{const prjAraclar=araclar.filter(a=>a.projeId===p.id);const prjAracIdler=prjAraclar.map(a=>a.id);const yk=yakitlar.filter(y=>prjAracIdler.includes(y.aracId)).reduce((s,y)=>s+(+y.toplam||0),0);const bk=bakimlar.filter(b=>prjAracIdler.includes(b.aracId)&&b.durum==='tamamlandi').reduce((s,b)=>s+(+b.maliyet||0),0);const topGider=yk+bk;const gelir=gelirGider.filter(g=>g.tur==='gelir'&&g.projeId===p.id).reduce((s,g)=>s+(+g.tutar||0),0);const gider=gelirGider.filter(g=>g.tur==='gider'&&g.projeId===p.id).reduce((s,g)=>s+(+g.tutar||0),0);
-      const prjPersonel=personel.filter(per=>prjAraclar.some(a=>a.opId===per.id));const personelMaliyeti=prjPersonel.reduce((s,per)=>s+(+per.maas||0),0);
-      return(<div key={p.id} style={{...S.card,marginBottom:0}}><div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}><div><div style={{fontSize:15,fontWeight:700,color:C.white}}>{p.ad}</div><div style={{fontSize:12,color:C.muted,marginTop:2}}>{p.musteri}</div></div><Badge d={p.durum}/></div><div style={{fontSize:12,color:C.muted,marginTop:10}}>📅 {fmtDate(p.baslangic)} → {fmtDate(p.bitis)}</div><div style={{marginTop:12}}><div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:4}}><span style={{color:C.muted}}>Bütçe Kullanımı</span><span style={{color:C.text}}>{fmtTL(topGider)} / {fmtTL(p.butce)}</span></div><ProgressBar value={topGider} max={p.butce}/></div>{gelir>0&&<div style={{marginTop:10,fontSize:12,color:gelir-gider>=0?C.green:C.red}}>Net: {fmtTL(gelir-gider)}</div>}{prjPersonel.length>0&&<div style={{marginTop:10,fontSize:12,color:C.text}}>👥 Atanan Personel: {prjPersonel.map(per=>per.ad).join(', ')}<div style={{color:C.accent,marginTop:2}}>Aylık Personel Maliyeti (tahmini): {fmtTL(personelMaliyeti)}</div></div>}<div style={{display:'flex',gap:6,marginTop:14}}><button style={S.btnO} onClick={()=>{setForm(p);setModal(true);}}>✏️ Düzenle</button><button style={S.btnR} onClick={()=>del(p.id)}>🗑 Sil</button></div></div>);})}
+    {projeler.length>0&&hasRC&&<div style={{...S.card,marginBottom:16}}>
+      <div style={S.secTitle}>📊 Proje Kârlılık Karşılaştırması (Gelir/Gider Kayıtlarına Göre)</div>
+      <ResponsiveContainer width="100%" height={Math.max(140,projeler.length*50)}>
+        <BarChart data={tumKarlar} layout="vertical" margin={{left:10}}>
+          <CartesianGrid strokeDasharray="3 3" stroke={C.border} horizontal={false}/><XAxis type="number" tick={{fill:C.muted,fontSize:10}} tickFormatter={v=>(v/1000)+'K'}/><YAxis type="category" dataKey="ad" width={140} tick={{fill:C.text,fontSize:11}}/><Tooltip contentStyle={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,fontSize:12}} formatter={v=>fmtTL(v)}/>
+          <Bar dataKey="net" radius={[0,4,4,0]}>{tumKarlar.map((t,i)=><Cell key={i} fill={t.net>=0?C.green:C.red}/>)}</Bar>
+        </BarChart>
+      </ResponsiveContainer>
+      <div style={{fontSize:11,color:C.muted,marginTop:8}}>ℹ️ Net kâr, projeye bağlı "Gelir/Gider" muhasebe kayıtlarındaki gelirden; yakıt, tamamlanmış bakım ve diğer muhasebe giderleri düşülerek hesaplanır. Kesilen fatura toplamları ayrıca (bilgi amaçlı) gösterilir — aynı tutarın iki kez sayılmaması için net kâra dahil edilmez.</div>
+    </div>}
+    <div style={{display:'flex',justifyContent:'flex-end',marginBottom:14,gap:8}}>
+      {projeler.length>0&&<button style={S.btnO} onClick={()=>printReport({
+        baslik:'Proje Kârlılık Raporu',
+        altBaslik:`${projeler.length} proje — ${today()}`,
+        ozetKartlari:[{value:fmtTL(tumKarlar.reduce((s,t)=>s+t.net,0)),label:'Toplam Net Kâr'},{value:tumKarlar.filter(t=>t.net<0).length,label:'Zararda Proje'}],
+        headers:['Proje','Müşteri','Durum','Muhasebe Geliri','Yakıt','Bakım','Diğer Gider','Net Kâr','Kâr Marjı'],
+        rows:projeler.map(p=>{const k=kârlılık(p);return[p.ad,p.musteri,p.durum,fmtTL(k.muhasebeGelir),fmtTL(k.yakitGider),fmtTL(k.bakimGider),fmtTL(k.muhasebeGiderDiger),fmtTL(k.netKar),k.karMarji!=null?`%${k.karMarji.toFixed(0)}`:'—'];}),
+        notlar:'Net kâr, projeye bağlı Gelir/Gider muhasebe kayıtlarındaki gelirden yakıt, bakım ve diğer muhasebe giderleri düşülerek hesaplanır. Kesilen fatura toplamları çifte sayımı önlemek için dahil edilmemiştir.',
+      })}>🖨️ PDF Rapor</button>}
+      <button style={S.btn()} onClick={()=>{setForm({durum:'aktif'});setModal(true);}}>＋ Proje Ekle</button>
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(320px,1fr))',gap:16}}>
+      {projeler.map(p=>{const k=kârlılık(p);
+      return(<div key={p.id} style={{...S.card,marginBottom:0}}><div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}><div><div style={{fontSize:15,fontWeight:700,color:C.white}}>{p.ad}</div><div style={{fontSize:12,color:C.muted,marginTop:2}}>{p.musteri}</div></div><Badge d={p.durum}/></div><div style={{fontSize:12,color:C.muted,marginTop:10}}>📅 {fmtDate(p.baslangic)} → {fmtDate(p.bitis)}</div><div style={{marginTop:12}}><div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:4}}><span style={{color:C.muted}}>Bütçe Kullanımı</span><span style={{color:C.text}}>{fmtTL(k.yakitGider+k.bakimGider)} / {fmtTL(p.butce)}</span></div><ProgressBar value={k.yakitGider+k.bakimGider} max={p.butce}/></div>
+      <div style={{marginTop:14,paddingTop:12,borderTop:`1px solid ${C.border}`,fontSize:12}}>
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:5}}><span style={{color:C.muted}}>💰 Muhasebe Geliri</span><span style={{color:C.green}}>{fmtTL(k.muhasebeGelir)}</span></div>
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:5}}><span style={{color:C.muted}}>⛽ Yakıt Gideri</span><span style={{color:C.text}}>-{fmtTL(k.yakitGider)}</span></div>
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:5}}><span style={{color:C.muted}}>🔧 Bakım Gideri</span><span style={{color:C.text}}>-{fmtTL(k.bakimGider)}</span></div>
+        {k.muhasebeGiderDiger>0&&<div style={{display:'flex',justifyContent:'space-between',marginBottom:5}}><span style={{color:C.muted}}>📋 Diğer Muhasebe Gideri</span><span style={{color:C.text}}>-{fmtTL(k.muhasebeGiderDiger)}</span></div>}
+        <div style={{display:'flex',justifyContent:'space-between',marginTop:8,paddingTop:8,borderTop:`1px solid ${C.border}`,fontWeight:700}}><span style={{color:C.white}}>Tahmini Net Kâr</span><span style={{color:k.netKar>=0?C.green:C.red}}>{fmtTL(k.netKar)}{k.karMarji!=null?` (%${k.karMarji.toFixed(0)})`:''}</span></div>
+        {k.faturaToplami>0&&<div style={{fontSize:11,color:C.muted,marginTop:6}}>🧾 Kesilen fatura toplamı (bilgi amaçlı): {fmtTL(k.faturaToplami)}</div>}
+      </div>
+      {k.prjPersonel.length>0&&<div style={{marginTop:10,fontSize:12,color:C.text}}>👥 Atanan Personel: {k.prjPersonel.map(per=>per.ad).join(', ')}<div style={{color:C.accent,marginTop:2}}>Aylık Personel Maliyeti (tahmini, net kâra dahil değil): {fmtTL(k.personelMaliyeti)}</div></div>}
+      <div style={{display:'flex',gap:6,marginTop:14}}><button style={S.btnO} onClick={()=>{setForm(p);setModal(true);}}>✏️ Düzenle</button><button style={S.btnR} onClick={()=>del(p.id)}>🗑 Sil</button></div></div>);})}
     </div>
     {modal&&(<Modal title={form.id?'Proje Düzenle':'Yeni Proje'} onClose={()=>setModal(false)}>
       <FG label="Proje Adı"><input style={S.inp} value={form.ad||''} onChange={e=>setForm(f=>({...f,ad:e.target.value}))}/></FG>
@@ -3311,6 +3497,78 @@ ${gecmis}
 const gelirKategorileri=()=>{const s=getSettings().gelirKategorileri;return (Array.isArray(s)&&s.length)?s:DEFAULT_SETTINGS.gelirKategorileri;};
 const giderKategorileri=()=>{const s=getSettings().giderKategorileri;return (Array.isArray(s)&&s.length)?s:DEFAULT_SETTINGS.giderKategorileri;};
 
+// Kategori bazında aylık bütçe limitleri ve gerçekleşen harcama karşılaştırması.
+function ButceTakibi(){
+  const [butceler,setButceler]=useState(LS.get('butceler'));
+  const gelirGider=LS.get('gelirGider');
+  const [ay,setAy]=useState(thisMonth());
+  const [modal,setModal]=useState(false),[form,setForm]=useState({});
+  const kategoriler=giderKategorileri();
+
+  const kaydet=()=>{
+    if(!form.kategori||!(+form.aylikLimit>0)){fpToast('Kategori ve limit (0\'dan büyük) gereklidir.');return;}
+    const mevcut=butceler.find(b=>b.kategori===form.kategori);
+    const n=mevcut?butceler.map(b=>b.kategori===form.kategori?{...b,aylikLimit:+form.aylikLimit}:b):[...butceler,{id:uid(),kategori:form.kategori,aylikLimit:+form.aylikLimit}];
+    LS.set('butceler',n);setButceler(n);setModal(false);
+  };
+  const sil=async(id)=>{if(!(await fpConfirm('Bu bütçe limiti kaldırılsın mı?')))return;const n=butceler.filter(b=>b.id!==id);LS.set('butceler',n);setButceler(n);};
+
+  const harcanan=(kategori)=>gelirGider.filter(g=>g.tur==='gider'&&g.kategori===kategori&&g.tarih?.startsWith(ay)).reduce((s,g)=>s+(+g.tutar||0),0);
+  const satirlar=butceler.map(b=>{
+    const h=harcanan(b.kategori);
+    const yuzde=b.aylikLimit>0?Math.round((h/b.aylikLimit)*100):0;
+    return{...b,harcanan:h,yuzde,asildi:h>b.aylikLimit};
+  }).sort((a,b)=>b.yuzde-a.yuzde);
+  const asilanSayisi=satirlar.filter(s=>s.asildi).length;
+  const toplamLimit=satirlar.reduce((s,b)=>s+b.aylikLimit,0);
+  const toplamHarcanan=satirlar.reduce((s,b)=>s+b.harcanan,0);
+
+  return(<div>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14,flexWrap:'wrap',gap:10}}>
+      <select style={{...S.sel,width:180}} value={ay} onChange={e=>setAy(e.target.value)}>{Array.from({length:12},(_,i)=>{const d=new Date();d.setMonth(d.getMonth()-i);const m=d.toISOString().slice(0,7);return<option key={m} value={m}>{fmtMonth(m)}</option>;})}</select>
+      <div style={{display:'flex',gap:8}}>
+        {satirlar.length>0&&<button style={S.btnO} onClick={()=>printReport({
+          baslik:'Bütçe Durum Raporu',
+          altBaslik:fmtMonth(ay),
+          ozetKartlari:[{value:fmtTL(toplamLimit),label:'Toplam Bütçe Limiti'},{value:fmtTL(toplamHarcanan),label:'Gerçekleşen Harcama'},{value:asilanSayisi,label:'Limit Aşan Kategori'}],
+          headers:['Kategori','Limit','Harcanan','Kullanım %','Durum'],
+          rows:satirlar.map(s=>[s.kategori,fmtTL(s.aylikLimit),fmtTL(s.harcanan),`%${s.yuzde}`,s.asildi?'Aşıldı':'Normal']),
+        })}>🖨️ PDF Rapor</button>}
+        <button style={S.btn()} onClick={()=>{setForm({kategori:kategoriler[0]});setModal(true);}}>＋ Bütçe Limiti Ekle</button>
+      </div>
+    </div>
+    <div style={S.g3}>
+      <StatCard color={C.blue} value={fmtTL(toplamLimit)} label="Toplam Bütçe Limiti"/>
+      <StatCard color={toplamHarcanan>toplamLimit?C.red:C.green} value={fmtTL(toplamHarcanan)} label="Gerçekleşen Harcama"/>
+      <StatCard color={asilanSayisi>0?C.red:C.green} value={asilanSayisi} label="Limit Aşan Kategori"/>
+    </div>
+    {satirlar.length===0?(
+      <div style={S.card}><div style={{textAlign:'center',color:C.muted,padding:30}}>Henüz bütçe limiti tanımlanmamış. Bir gider kategorisi için aylık harcama limiti belirleyerek başlayın (ör. "Yakıt" için ayda 50.000 ₺).</div></div>
+    ):(
+      <div style={S.card}>
+        <div style={S.secTitle}>🎯 {fmtMonth(ay)} — Kategori Bazında Bütçe Durumu</div>
+        {satirlar.map(s=>(<div key={s.id} style={{marginBottom:16}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+            <div style={{fontSize:13,color:C.white,fontWeight:600}}>{s.kategori}{s.asildi&&<span style={{color:C.red,marginLeft:8,fontSize:11}}>⚠️ Limit Aşıldı</span>}</div>
+            <div style={{display:'flex',alignItems:'center',gap:10}}>
+              <span style={{fontSize:12,color:C.muted}}>{fmtTL(s.harcanan)} / {fmtTL(s.aylikLimit)}</span>
+              <button style={S.btnO} onClick={()=>{setForm(s);setModal(true);}}>✏️</button>
+              <button style={S.btnR} onClick={()=>sil(s.id)}>🗑</button>
+            </div>
+          </div>
+          <ProgressBar value={s.harcanan} max={s.aylikLimit}/>
+        </div>))}
+      </div>
+    )}
+    {modal&&(<Modal title="Bütçe Limiti" onClose={()=>setModal(false)}>
+      <FG label="Gider Kategorisi"><select style={S.sel} value={form.kategori||''} onChange={e=>setForm(f=>({...f,kategori:e.target.value}))}>{kategoriler.map(k=><option key={k} value={k}>{k}</option>)}</select></FG>
+      <FG label="Aylık Limit (₺)"><input type="number" style={S.inp} value={form.aylikLimit||''} onChange={e=>setForm(f=>({...f,aylikLimit:+e.target.value}))}/></FG>
+      <div style={{fontSize:11,color:C.muted,marginTop:4}}>ℹ️ Bu limit her ay için geçerlidir (belirli bir aya özel değildir). Bir kategori için zaten bir limit varsa, kaydettiğinizde güncellenir.</div>
+      <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginTop:16}}><button style={S.btnO} onClick={()=>setModal(false)}>İptal</button><button style={S.btn()} onClick={kaydet}>Kaydet</button></div>
+    </Modal>)}
+  </div>);
+}
+
 function GelirGider(){
   const projeler=LS.get('projeler'),hesaplar=LS.get('hesaplar');
   const [kayitlar,setKayitlar]=useState(LS.get('gelirGider')),[modal,setModal]=useState(false),[form,setForm]=useState({}),[ayFiltre,setAyFiltre]=useState(thisMonth()),[turFiltre,setTurFiltre]=useState('tum'),[err,setErr]=useState('');
@@ -3347,6 +3605,59 @@ function GelirGider(){
       <div style={S.g2}><FG label="Tarih"><input type="date" style={S.inp} value={form.tarih||''} onChange={e=>setForm(f=>({...f,tarih:e.target.value}))}/></FG><FG label="İlgili Proje"><select style={S.sel} value={form.projeId||''} onChange={e=>setForm(f=>({...f,projeId:idVal(e.target.value)}))}><option value="">— Yok —</option>{projeler.map(p=><option key={p.id} value={p.id}>{p.ad}</option>)}</select></FG></div>
       <FormError msg={err}/>
       <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginTop:8}}><button style={S.btnO} onClick={()=>setModal(false)}>İptal</button><button style={S.btn(form.tur==='gider'?C.red:C.green)} onClick={save}>Kaydet</button></div>
+    </Modal>)}
+  </div>);
+}
+
+const PERIYOT_LABEL={aylik:'Her Ay',['3ay']:'Her 3 Ayda Bir',yillik:'Her Yıl'};
+function TekrarlayanFaturalar(){
+  const cariler=LS.get('cariler');
+  const [sablonlar,setSablonlar]=useState(LS.get('tekrarlananFaturalar')||[]);
+  const [modal,setModal]=useState(false),[form,setForm]=useState({}),[err,setErr]=useState('');
+
+  const kaydet=()=>{
+    if(!form.cariId||!(+form.tutar>0)||!form.sonrakiTarih){setErr('Cari, tutar ve ilk fatura tarihi zorunludur.');return;}
+    setErr('');
+    const n=form.id?sablonlar.map(s=>s.id===form.id?form:s):[...sablonlar,{...form,id:uid(),aktif:true}];
+    LS.set('tekrarlananFaturalar',n);setSablonlar(n);setModal(false);
+  };
+  const sil=async(id)=>{if(!(await fpConfirm('Bu tekrarlayan fatura şablonu silinsin mi? (Şimdiye kadar oluşturulmuş faturalar silinmez.)')))return;const n=sablonlar.filter(s=>s.id!==id);LS.set('tekrarlananFaturalar',n);setSablonlar(n);};
+  const durumDegistir=(id)=>{const n=sablonlar.map(s=>s.id===id?{...s,aktif:s.aktif===false}:s);LS.set('tekrarlananFaturalar',n);setSablonlar(n);};
+  const simdiCalistir=()=>{const {uretilen}=tekrarlananFaturalariUret();setSablonlar(LS.get('tekrarlananFaturalar')||[]);fpToast(uretilen>0?`✅ ${uretilen} fatura oluşturuldu.`:'ℹ️ Vadesi gelen tekrarlayan fatura yok.');};
+
+  return(<div>
+    <InfoBox color={C.blue}>ℹ️ Kira, sigorta, abonelik gibi düzenli tekrar eden faturalarınızı burada bir kez tanımlayın. Vadesi gelen faturalar, uygulamayı her açtığınızda otomatik olarak "Faturalar" listesine eklenir (tarayıcı kapalıyken arka planda çalışmaz — bir sonraki açılışta o zamana kadarki birikmiş faturaları da yakalar).</InfoBox>
+    <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginBottom:14}}>
+      <button style={S.btnO} onClick={simdiCalistir}>🔄 Şimdi Kontrol Et</button>
+      <button style={S.btn()} onClick={()=>{setForm({tur:'kesilen',periyot:'aylik',sonrakiTarih:today(),vadeGun:30,kdvOran:getSettings().kdvOrani??20});setErr('');setModal(true);}}>＋ Tekrarlayan Fatura Ekle</button>
+    </div>
+    <div style={S.card}>
+      <table style={S.tbl}><thead><tr><th style={S.th}>Cari</th><th style={S.th}>Tür</th><th style={S.th}>Açıklama</th><th style={S.th}>Tutar</th><th style={S.th}>Periyot</th><th style={S.th}>Sonraki Tarih</th><th style={S.th}>Durum</th><th style={S.th}></th></tr></thead>
+      <tbody>{sablonlar.map(s=>{const c=cariById(s.cariId);return(<tr key={s.id}>
+        <td style={S.td}><strong style={{color:C.white}}>{c?.ad||'—'}</strong></td>
+        <td style={S.td}>{s.tur==='kesilen'?'🧾 Kesilen':'📥 Alınan'}</td>
+        <td style={S.td}><span style={{fontSize:12}}>{s.aciklama||'—'}</span></td>
+        <td style={S.td}>{fmtTL(s.tutar)}</td>
+        <td style={S.td}>{PERIYOT_LABEL[s.periyot]||s.periyot}</td>
+        <td style={S.td}>{fmtDate(s.sonrakiTarih)}</td>
+        <td style={S.td}><span style={S.badge(s.aktif===false?C.muted:C.green)}>{s.aktif===false?'Durduruldu':'Aktif'}</span></td>
+        <td style={S.td}><div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+          <button style={S.btnO} onClick={()=>durumDegistir(s.id)}>{s.aktif===false?'▶️ Başlat':'⏸ Durdur'}</button>
+          <button style={S.btnO} onClick={()=>{setForm(s);setErr('');setModal(true);}}>✏️</button>
+          <button style={S.btnR} onClick={()=>sil(s.id)}>🗑</button>
+        </div></td>
+      </tr>);})}{sablonlar.length===0&&<tr><td style={S.td} colSpan={8}><div style={{textAlign:'center',color:C.muted,padding:20}}>Henüz tekrarlayan fatura tanımlanmamış.</div></td></tr>}</tbody></table>
+    </div>
+    {modal&&(<Modal title={form.id?'Tekrarlayan Fatura Düzenle':'Yeni Tekrarlayan Fatura'} onClose={()=>setModal(false)}>
+      <FG label="Tür"><select style={S.sel} value={form.tur||'kesilen'} onChange={e=>setForm(f=>({...f,tur:e.target.value,cariId:null}))}><option value="kesilen">🧾 Kesilen (Müşteriye)</option><option value="alinan">📥 Alınan (Tedarikçiden)</option></select></FG>
+      <FG label="Cari"><select style={S.sel} value={form.cariId||''} onChange={e=>setForm(f=>({...f,cariId:idVal(e.target.value)}))}><option value="">— Seçiniz —</option>{cariler.filter(c=>(c.tipler||[]).includes(form.tur==='alinan'?'tedarikci':'musteri')).map(c=><option key={c.id} value={c.id}>{c.ad}</option>)}</select></FG>
+      <FG label="Açıklama"><input style={S.inp} placeholder="Örn: Şantiye sahası kira bedeli" value={form.aciklama||''} onChange={e=>setForm(f=>({...f,aciklama:e.target.value}))}/></FG>
+      <div style={S.g2}><FG label="Tutar (₺, KDV Hariç)"><input type="number" style={S.inp} value={form.tutar||''} onChange={e=>setForm(f=>({...f,tutar:+e.target.value}))}/></FG><FG label="KDV Oranı (%)"><input type="number" style={S.inp} value={form.kdvOran??20} onChange={e=>setForm(f=>({...f,kdvOran:+e.target.value}))}/></FG></div>
+      <div style={S.g2}><FG label="Periyot"><select style={S.sel} value={form.periyot||'aylik'} onChange={e=>setForm(f=>({...f,periyot:e.target.value}))}><option value="aylik">Her Ay</option><option value="3ay">Her 3 Ayda Bir</option><option value="yillik">Her Yıl</option></select></FG><FG label="Vade (Gün)"><input type="number" style={S.inp} value={form.vadeGun??30} onChange={e=>setForm(f=>({...f,vadeGun:+e.target.value}))}/></FG></div>
+      <FG label="İlk Fatura Tarihi"><input type="date" style={S.inp} value={form.sonrakiTarih||''} onChange={e=>setForm(f=>({...f,sonrakiTarih:e.target.value}))}/></FG>
+      <div style={{fontSize:11,color:C.muted,marginTop:4}}>ℹ️ Bu tarihten itibaren, seçtiğiniz periyotla otomatik fatura oluşturulmaya başlanır.</div>
+      <FormError msg={err}/>
+      <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginTop:16}}><button style={S.btnO} onClick={()=>setModal(false)}>İptal</button><button style={S.btn()} onClick={kaydet}>Kaydet</button></div>
     </Modal>)}
   </div>);
 }
@@ -3776,12 +4087,14 @@ function FinansalRaporlar(){
 
 function Muhasebe(){
   const [tab,setTab]=useState('raporlar');
-  return(<div><TabBar tabs={[['raporlar','📊 Finansal Raporlar'],['cari','👥 Cariler'],['fatura','🧾 Faturalar'],['tahsilat','💵 Tahsilat & Ödeme'],['gelirgider','💰 Gelir/Gider'],['kasa','💳 Kasa & Banka'],['telegram','📲 Telegram Masraf Girişi']]} active={tab} onChange={setTab}/>
+  return(<div><TabBar tabs={[['raporlar','📊 Finansal Raporlar'],['cari','👥 Cariler'],['fatura','🧾 Faturalar'],['tekrar','🔁 Tekrarlayan Faturalar'],['tahsilat','💵 Tahsilat & Ödeme'],['gelirgider','💰 Gelir/Gider'],['butce','🎯 Bütçe'],['kasa','💳 Kasa & Banka'],['telegram','📲 Telegram Masraf Girişi']]} active={tab} onChange={setTab}/>
   {tab==='raporlar'&&<FinansalRaporlar/>}
   {tab==='cari'&&<Cariler/>}
   {tab==='fatura'&&<Faturalar/>}
+  {tab==='tekrar'&&<TekrarlayanFaturalar/>}
   {tab==='tahsilat'&&<TahsilatOdeme/>}
   {tab==='gelirgider'&&<GelirGider/>}
+  {tab==='butce'&&<ButceTakibi/>}
   {tab==='kasa'&&<KasaBanka/>}
   {tab==='telegram'&&<TelegramMasrafGirisleri/>}
   </div>);
@@ -4118,6 +4431,65 @@ function YedekEmailAyarlari(){
   );
 }
 
+function PushBildirimAyarlari(){
+  const [durum,setDurum]=useState(null);
+  const [yukleniyor,setYukleniyor]=useState(true);
+  const [islemde,setIslemde]=useState(false);
+  const [hata,setHata]=useState('');
+  const bagli=!!getSyncCfg().token;
+
+  const yukle=async()=>{
+    setYukleniyor(true);
+    try{setDurum(await fpPushDurum());}
+    catch{setDurum({destekleniyor:false});}
+    finally{setYukleniyor(false);}
+  };
+  useEffect(()=>{yukle();},[]);
+
+  const ac=async()=>{
+    setHata('');setIslemde(true);
+    try{await fpPushAbolOl();fpToast('✅ Tarayıcı bildirimleri açıldı.');await yukle();}
+    catch(e){setHata(e.message||'Açılamadı.');}
+    finally{setIslemde(false);}
+  };
+  const kapat=async()=>{
+    setIslemde(true);
+    try{await fpPushIptalEt();fpToast('Tarayıcı bildirimleri kapatıldı.');await yukle();}
+    catch(e){fpToast(e.message,'error');}
+    finally{setIslemde(false);}
+  };
+  const test=async()=>{
+    setIslemde(true);
+    try{const d=await fpPushTestGonder();fpToast(d.gonderildi>0?'✅ Test bildirimi gönderildi.':'ℹ️ Kayıtlı cihaz bulunamadı.');}
+    catch(e){fpToast(e.message,'error');}
+    finally{setIslemde(false);}
+  };
+
+  return(<div style={S.card}>
+    <div style={S.secTitle}>🔔 Tarayıcı Push Bildirimleri</div>
+    <div style={{fontSize:13,color:C.muted,marginBottom:14,lineHeight:1.6}}>Sekme kapalıyken bile, sigorta/muayene süresi dolan, vadesi geçen fatura ve kritik stok gibi uyarıların günlük özetini bu cihazın bildirim merkezinde gösterir. Her cihaz/tarayıcı ayrı ayrı açılmalıdır.</div>
+    {!bagli?(
+      <InfoBox color={C.blue}>ℹ️ Önce Ayarlar &gt; Senkronizasyon'dan sunucuya bağlanmalısınız.</InfoBox>
+    ):yukleniyor?(
+      <div style={{fontSize:13,color:C.muted}}>Yükleniyor…</div>
+    ):!durum?.destekleniyor?(
+      <InfoBox color={C.yellow}>⚠️ Bu tarayıcı push bildirimlerini desteklemiyor (Safari'de bazı sürümlerde veya gizli sekmede çalışmayabilir).</InfoBox>
+    ):(<>
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14}}>
+        <span style={S.badge(durum.abone?C.green:C.muted)}>{durum.abone?'✓ Bildirimler Açık':'Kapalı'}</span>
+        {durum.izin==='denied'&&<span style={{fontSize:12,color:C.red}}>Tarayıcı bildirim izni engellenmiş — tarayıcı ayarlarından siteye izin vermeniz gerekir.</span>}
+      </div>
+      {hata&&<div style={{...S.alert(C.red),marginBottom:12}}>⚠️ {hata}</div>}
+      <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
+        {!durum.abone?<button style={S.btn()} onClick={ac} disabled={islemde}>{islemde?'⏳ Açılıyor...':'🔔 Tarayıcı Bildirimlerini Aç'}</button>:(<>
+          <button style={S.btnO} onClick={test} disabled={islemde}>📤 Test Bildirimi Gönder</button>
+          <button style={S.btnR} onClick={kapat} disabled={islemde}>Kapat</button>
+        </>)}
+      </div>
+    </>)}
+  </div>);
+}
+
 
 function SenkronPaneli(){
   const cfg=getSyncCfg();
@@ -4349,6 +4721,7 @@ function Ayarlar(){
         <FG label="Acil Durum Telefonu (SOS)"><input type="tel" style={S.inp} placeholder="05XX XXX XX XX" value={s.acilDurumTel} onChange={e=>upd('acilDurumTel',e.target.value)}/></FG>
       </div>
       <FG label="Konum Bildirim Telefonu (Yer Giriş/Çıkış)"><input type="tel" style={S.inp} placeholder="05XX XXX XX XX" value={s.konumBildirimTel} onChange={e=>upd('konumBildirimTel',e.target.value)}/></FG>
+      <FG label="Amortisman Ömrü (Yıl) — Araç Maliyet Analizinde Kullanılır"><input type="number" style={S.inp} value={s.amortismanOmurYil} onChange={e=>upd('amortismanOmurYil',+e.target.value)}/></FG>
       <InfoBox color={C.blue}>ℹ️ Bu ayarlar; fatura, gelir-gider ve yakıt modüllerinde varsayılan değer olarak kullanılır.</InfoBox>
 
       <div style={{...S.secTitle,marginTop:22}}>🧾 Fatura Numaralandırma & Vade</div>
@@ -4471,6 +4844,7 @@ function Ayarlar(){
           </div>
         ))}
       </div>
+      <PushBildirimAyarlari/>
       <div style={S.card}>
         <div style={S.secTitle}>📲 WhatsApp / Telegram Entegrasyonu</div>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 0',borderBottom:`1px solid ${C.border}22`,marginBottom:12}}>
@@ -4701,6 +5075,7 @@ function AracYonetimi(){
       ['hasar','🛡️ Hasar & Sigorta'],
       ['parca','🏭 Yedek Parça'],
       ['saha','📱 Mobil Saha'],
+      ['maliyet','💰 Maliyet Analizi'],
     ]} active={tab} onChange={setTab}/>
     {tab==='araclar'&&<AraclarListesi/>}
     {tab==='bakim'&&<BakimTakibi/>}
@@ -4709,6 +5084,76 @@ function AracYonetimi(){
     {tab==='hasar'&&<HasarTakibi/>}
     {tab==='parca'&&<YedekParca/>}
     {tab==='saha'&&<MobilSaha/>}
+    {tab==='maliyet'&&<AracMaliyetAnalizi/>}
+  </div>);
+}
+
+// Araç başına toplam sahip olma maliyeti (Total Cost of Ownership) analizi.
+// Amortisman TAHMİNİDİR (alış fiyatı üzerinden doğrusal, varsayılan 8 yıl ömür — Ayarlar'dan
+// değiştirilebilir). Sigorta PRİMİ hiçbir yerde ayrı bir gider olarak tutulmadığı için (sadece
+// sigorta bitiş TARİHİ var) toplam maliyete dahil edilmez; bunu net biçimde belirtiyoruz.
+function AracMaliyetAnalizi(){
+  const araclar=LS.get('araclar'),yakitlar=LS.get('yakitlar'),bakimlar=LS.get('bakimlar'),hasarlar=LS.get('hasarlar');
+  const [siralama,setSiralama]=useState('toplam');
+  const omurYil=getSettings().amortismanOmurYil||8;
+  const hasRC=!!RC.BarChart;
+
+  const veri=araclar.map(a=>{
+    const yakit=yakitlar.filter(y=>y.aracId===a.id).reduce((s,y)=>s+(+y.toplam||0),0);
+    const bakim=bakimlar.filter(b=>b.aracId===a.id&&b.durum==='tamamlandi').reduce((s,b)=>s+(+b.maliyet||0),0);
+    const hasarNet=hasarlar.filter(h=>h.aracId===a.id).reduce((s,h)=>s+Math.max(0,(+h.maliyet||0)-(+h.tazminat||0)),0);
+    const yasYil=a.yil?Math.max(0,new Date().getFullYear()-a.yil):null;
+    const yillikAmortisman=a.alisFiyat?(+a.alisFiyat/omurYil):0;
+    const amortisman=yasYil!=null?Math.min(+a.alisFiyat||0,yillikAmortisman*Math.min(yasYil,omurYil)):0;
+    const toplam=yakit+bakim+hasarNet+amortisman;
+    const saatBasi=a.saat>0?toplam/a.saat:null;
+    return{a,yakit,bakim,hasarNet,amortisman,toplam,saatBasi};
+  }).sort((x,y)=>siralama==='toplam'?y.toplam-x.toplam:siralama==='yakit'?y.yakit-x.yakit:y.bakim-x.bakim);
+
+  const genelToplam=veri.reduce((s,v)=>s+v.toplam,0);
+
+  return(<div>
+    <InfoBox color={C.blue}>ℹ️ Amortisman, alış fiyatı üzerinden doğrusal ve <strong>tahmini</strong> olarak hesaplanır (varsayılan {omurYil} yıl ömür — Ayarlar &gt; Genel'den değiştirilebilir). Sigorta <strong>primi</strong> hiçbir modülde ayrı bir gider olarak tutulmadığından (sadece bitiş tarihi takip ediliyor) toplam maliyete dahil edilmemiştir.</InfoBox>
+    <div style={S.g3}>
+      <StatCard color={C.accent} value={fmtTL(genelToplam)} label="Filo Toplam Maliyeti"/>
+      <StatCard color={C.red} value={veri[0]?.a.ad||'—'} label="En Maliyetli Araç"/>
+      <StatCard color={C.green} value={fmtTL(genelToplam/(araclar.length||1))} label="Araç Başına Ortalama"/>
+    </div>
+    {hasRC&&veri.length>0&&<div style={{...S.card,marginBottom:16}}>
+      <div style={S.secTitle}>📊 Araç Başına Toplam Maliyet</div>
+      <ResponsiveContainer width="100%" height={Math.max(160,veri.length*40)}>
+        <BarChart data={veri.map(v=>({ad:v.a.ad,Yakıt:v.yakit,Bakım:v.bakim,Hasar:v.hasarNet,Amortisman:Math.round(v.amortisman)}))} layout="vertical" margin={{left:10}}>
+          <CartesianGrid strokeDasharray="3 3" stroke={C.border} horizontal={false}/><XAxis type="number" tick={{fill:C.muted,fontSize:10}} tickFormatter={v=>(v/1000)+'K'}/><YAxis type="category" dataKey="ad" width={130} tick={{fill:C.text,fontSize:11}}/><Tooltip contentStyle={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,fontSize:12}} formatter={v=>fmtTL(v)}/><Legend wrapperStyle={{fontSize:11}}/>
+          <Bar dataKey="Yakıt" stackId="a" fill={C.accent}/><Bar dataKey="Bakım" stackId="a" fill={C.blue}/><Bar dataKey="Hasar" stackId="a" fill={C.red}/><Bar dataKey="Amortisman" stackId="a" fill={C.muted} radius={[0,4,4,0]}/>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>}
+    <div style={S.card}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10,flexWrap:'wrap',gap:10}}>
+        <div style={S.secTitle}>💰 Araç Bazında Maliyet Dökümü</div>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          <select style={{...S.sel,width:'auto'}} value={siralama} onChange={e=>setSiralama(e.target.value)}><option value="toplam">Toplam Maliyete Göre Sırala</option><option value="yakit">Yakıta Göre Sırala</option><option value="bakim">Bakıma Göre Sırala</option></select>
+          <button style={S.btnO} onClick={()=>printReport({
+            baslik:'Araç Maliyet Analizi Raporu',
+            altBaslik:`${veri.length} araç — ${today()}`,
+            ozetKartlari:[{value:fmtTL(genelToplam),label:'Filo Toplam Maliyeti'},{value:fmtTL(genelToplam/(araclar.length||1)),label:'Araç Başına Ortalama'}],
+            headers:['Araç','Tip','Yakıt','Bakım','Hasar (Net)','Amortisman (Tahmini)','Toplam','Saat Başına'],
+            rows:veri.map(v=>[v.a.ad,v.a.tip,fmtTL(v.yakit),fmtTL(v.bakim),fmtTL(v.hasarNet),fmtTL(v.amortisman),fmtTL(v.toplam),v.saatBasi!=null?fmtTL(v.saatBasi)+'/sa':'—']),
+            notlar:`Amortisman tahminidir (alış fiyatı üzerinden doğrusal, ${omurYil} yıl ömür varsayımıyla). Sigorta primi hiçbir modülde ayrı bir gider olarak tutulmadığından dahil edilmemiştir.`,
+          })}>🖨️ PDF Rapor</button>
+        </div>
+      </div>
+      <table style={S.tbl}><thead><tr><th style={S.th}>Araç</th><th style={S.th}>Yakıt</th><th style={S.th}>Bakım</th><th style={S.th}>Hasar (Net)</th><th style={S.th}>Amortisman (Tahmini)</th><th style={S.th}>Toplam</th><th style={S.th}>Saat Başına</th></tr></thead>
+      <tbody>{veri.map(v=>(<tr key={v.a.id}>
+        <td style={S.td}><strong style={{color:C.white}}>{v.a.ad}</strong><div style={{fontSize:11,color:C.muted}}>{v.a.tip}</div></td>
+        <td style={S.td}>{fmtTL(v.yakit)}</td>
+        <td style={S.td}>{fmtTL(v.bakim)}</td>
+        <td style={S.td}>{v.hasarNet>0?<span style={{color:C.red}}>{fmtTL(v.hasarNet)}</span>:'—'}</td>
+        <td style={S.td}>{fmtTL(v.amortisman)}</td>
+        <td style={S.td}><strong style={{color:C.accent}}>{fmtTL(v.toplam)}</strong></td>
+        <td style={S.td}>{v.saatBasi!=null?fmtTL(v.saatBasi)+'/sa':'—'}</td>
+      </tr>))}{veri.length===0&&<tr><td style={S.td} colSpan={7}><div style={{textAlign:'center',color:C.muted,padding:20}}>Araç kaydı yok.</div></td></tr>}</tbody></table>
+    </div>
   </div>);
 }
 
@@ -5489,7 +5934,17 @@ Sadece değerlendirme paragrafını yaz, başlık veya madde işareti kullanma.`
       <StatCard color={siralanmis.length?renkSkor(Math.round(siralanmis.reduce((s,x)=>s+x.skor,0)/siralanmis.length)):C.muted} value={siralanmis.length?Math.round(siralanmis.reduce((s,x)=>s+x.skor,0)/siralanmis.length):'—'} label="Ortalama Filo Skoru"/>
     </div>
     <div style={S.card}>
-      <div style={S.secTitle}>🚦 Sürücü Sıralaması</div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10,flexWrap:'wrap',gap:10}}>
+        <div style={S.secTitle}>🚦 Sürücü Sıralaması</div>
+        {siralanmis.length>0&&<button style={S.btnO} onClick={()=>printReport({
+          baslik:'Sürücü Değerlendirme Raporu',
+          altBaslik:`Son 30 gün — ${siralanmis.length} personel`,
+          ozetKartlari:[{value:Math.round(siralanmis.reduce((s,x)=>s+x.skor,0)/siralanmis.length),label:'Ortalama Filo Skoru'},{value:siralanmis.reduce((s,x)=>s+x.metrik.ihlaller,0),label:'Toplam Hız İhlali'}],
+          headers:['Personel','Skor','Mesafe (km)','Ortalama Hız','Maks. Hız','Hız İhlali'],
+          rows:siralanmis.map(s=>[s.p.ad,s.skor,s.metrik.mesafeKm.toFixed(0),s.metrik.ortalamaHiz.toFixed(0)+' km/s',s.metrik.maksHiz.toFixed(0)+' km/s',s.metrik.ihlaller]),
+          notlar:`Hız limiti: ${hizLimiti} km/s. Skor; hız ihlali, iş güvenliği olayı, iş emri tamamlama oranı ve performans değerlendirmesine göre hesaplanır.`,
+        })}>🖨️ PDF Rapor</button>}
+      </div>
       <table style={S.tbl}><thead><tr><th style={S.th}>Personel</th><th style={S.th}>Skor</th><th style={S.th}>Mesafe (30g)</th><th style={S.th}>Ortalama Hız</th><th style={S.th}>Maks. Hız</th><th style={S.th}>Hız İhlali</th><th style={S.th}></th></tr></thead>
       <tbody>{siralanmis.map(s=>(<tr key={s.p.id} style={{cursor:'pointer',background:secili===s.p.id?`${C.accent}11`:'transparent'}} onClick={()=>{setSecili(s.p.id);setAiRapor('');setAiHata('');}}>
         <td style={S.td}><strong style={{color:C.white}}>{s.p.ad}</strong><div style={{fontSize:11,color:C.muted}}>{s.p.pozisyon||'—'}</div></td>
@@ -5571,7 +6026,7 @@ const rolSayfalari=(rol)=>{const r=ROL_TANIMLARI[rol];if(!r)return null;return r
 
 // ── App ───────────────────────────────────────────────────────────────────────
 function App(){
-  useEffect(()=>{seed();migratePersonelModulu();migrateCariBirlestir();ensureSettings();migrateSahaServisTipleriEkle();},[]);
+  useEffect(()=>{seed();migratePersonelModulu();migrateCariBirlestir();ensureSettings();migrateSahaServisTipleriEkle();tekrarlananFaturalariUret();},[]);
   const [active,setActive]=useState(()=>{const h=window.location.hash.replace('#','');if(ESKI_SAYFA_YONLENDIRME[h])return ESKI_SAYFA_YONLENDIRME[h];if(ALL_PAGES.some(p=>p.id===h))return h;return getSettings().baslangicSayfasi||'dashboard';});
   const [menuOpen,setMenuOpen]=useState(false);
   const [,forceThemeRender]=useState(0);
