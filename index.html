@@ -182,6 +182,27 @@ const LS = {
   getObj:(k,fb={})=>{try{const v=localStorage.getItem(k);return v?JSON.parse(v):fb;}catch{return fb;}},
 };
 const uid=()=>`${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+// Telefon kameralarından gelen fotoğraflar birkaç MB olabilir; localStorage kotasını (genelde
+// ~5-10MB) hızla doldurmaması için yüklerken kenarı en fazla 1280px olacak şekilde küçültüp
+// JPEG kalitesini düşürür. Böylece bir fotoğraf genelde birkaç yüz KB'a iner.
+const resimSikistir=(dosya,maxKenar=1280,kalite=0.72)=>new Promise((resolve,reject)=>{
+  if(!dosya.type?.startsWith('image/')){reject(new Error('Sadece resim dosyaları desteklenir.'));return;}
+  const okuyucu=new FileReader();
+  okuyucu.onload=()=>{
+    const img=new Image();
+    img.onload=()=>{
+      let{width:w,height:h}=img;
+      if(w>maxKenar||h>maxKenar){const oran=maxKenar/Math.max(w,h);w=Math.round(w*oran);h=Math.round(h*oran);}
+      const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;
+      canvas.getContext('2d').drawImage(img,0,0,w,h);
+      resolve(canvas.toDataURL('image/jpeg',kalite));
+    };
+    img.onerror=()=>reject(new Error('Resim okunamadı.'));
+    img.src=okuyucu.result;
+  };
+  okuyucu.onerror=()=>reject(new Error('Dosya okunamadı.'));
+  okuyucu.readAsDataURL(dosya);
+});
 // Kayıt ID'leri karışık tiptedir (başlangıç verileri sayısal, uid() ile eklenenler metin).
 // Select kutularında seçilen değeri orijinal ID tipini bozmadan geri döndürür.
 const idVal=(v)=>{if(v===''||v==null)return null;const n=+v;return isNaN(n)?v:n;};
@@ -812,6 +833,7 @@ const MODUL_LISTESI=[
   {id:'isemri',label:'İş Emirleri',icon:'📌'},
   {id:'arac',label:'Araç Yönetimi',icon:'🚜'},
   {id:'konum',label:'Konum & Sürücü Takip',icon:'📍'},
+  {id:'duyuru',label:'Toplu Duyuru',icon:'📢'},
   {id:'muhasebe',label:'Muhasebe',icon:'💰'},
   {id:'ik',label:'İnsan Kaynakları',icon:'🧑‍💼'},
   {id:'gorevler',label:'Görevler',icon:'✅'},
@@ -1967,6 +1989,8 @@ function AraclarListesi(){
       <FG label="Durum"><select style={{...S.sel,maxWidth:220}} value={form.durum||'aktif'} onChange={e=>setForm(f=>({...f,durum:e.target.value}))}><option value="aktif">Aktif</option><option value="bakimda">Bakımda</option><option value="hurda">Hurda</option></select></FG>
       <div style={S.g2}><FG label="Marka/Model"><input style={S.inp} value={form.markaModel||''} onChange={e=>setForm(f=>({...f,markaModel:e.target.value}))} placeholder="Örn: Komatsu PC200"/></FG><FG label="Lastik Sayısı"><input type="number" style={S.inp} value={form.lastikSayisi||''} onChange={e=>setForm(f=>({...f,lastikSayisi:+e.target.value}))}/></FG></div>
       <div style={S.g2}><FG label="Sigorta Bitiş"><input type="date" style={S.inp} value={form.sigorta||''} onChange={e=>setForm(f=>({...f,sigorta:e.target.value}))}/></FG><FG label="Muayene Bitiş"><input type="date" style={S.inp} value={form.muayene||''} onChange={e=>setForm(f=>({...f,muayene:e.target.value}))}/></FG></div>
+      <div style={S.g2}><FG label="Sigorta Şirketi"><input style={S.inp} value={form.sigortaSirketi||''} onChange={e=>setForm(f=>({...f,sigortaSirketi:e.target.value}))} placeholder="Örn: Anadolu Sigorta"/></FG><FG label="Poliçe No"><input style={S.inp} value={form.sigortaPoliceNo||''} onChange={e=>setForm(f=>({...f,sigortaPoliceNo:e.target.value}))}/></FG></div>
+      <div style={S.g2}><FG label="Teminat Türü"><select style={S.sel} value={form.sigortaTeminat||'trafik'} onChange={e=>setForm(f=>({...f,sigortaTeminat:e.target.value}))}><option value="trafik">Zorunlu Trafik</option><option value="kasko">Kasko</option><option value="ikisi">Trafik + Kasko</option><option value="diger">Diğer</option></select></FG><FG label="Prim Tutarı (₺/Yıl)"><input type="number" style={S.inp} value={form.sigortaPrim||''} onChange={e=>setForm(f=>({...f,sigortaPrim:+e.target.value}))}/></FG></div>
       <FG label="Alış Fiyatı (₺)"><input type="number" style={S.inp} value={form.alisFiyat||''} onChange={e=>setForm(f=>({...f,alisFiyat:+e.target.value}))}/></FG>
       <FG label="Dökümanlar (Ruhsat, Sigorta Poliçesi vb.)">
         <input type="file" style={S.inp} onChange={e=>{const dosya=e.target.files[0];if(!dosya)return;const r=new FileReader();r.onload=()=>{setForm(f=>({...f,dokumanlar:[...(f.dokumanlar||[]),{id:uid(),ad:dosya.name,veri:r.result,tarih:today()}]}));};r.readAsDataURL(dosya);}}/>
@@ -2772,13 +2796,32 @@ function HasarTakibi(){
       <button style={S.btn()} onClick={()=>{setForm({tarih:today(),durum:'acik'});setErr('');setModal(true);}}>＋ Hasar Ekle</button>
     </div>
     <div style={S.card}><table style={S.tbl}><thead><tr><th style={S.th}>Araç</th><th style={S.th}>Tarih</th><th style={S.th}>Açıklama</th><th style={S.th}>Maliyet</th><th style={S.th}>Tazminat</th><th style={S.th}>Durum</th><th style={S.th}></th></tr></thead>
-    <tbody>{[...hasarlar].sort((a,b)=>b.tarih?.localeCompare(a.tarih)).map(h=>{const a=araclar.find(x=>x.id===h.aracId);return(<tr key={h.id}><td style={S.td}><strong style={{color:C.white}}>{a?.ad||'—'}</strong></td><td style={S.td}>{fmtDate(h.tarih)}</td><td style={S.td}><span style={{fontSize:12}}>{h.aciklama}</span></td><td style={S.td}>{fmtTL(h.maliyet)}</td><td style={S.td}><span style={{color:C.green}}>{fmtTL(h.tazminat)}</span></td><td style={S.td}><Badge d={h.durum}/></td><td style={S.td}><div style={{display:'flex',gap:5}}><button style={S.btnO} onClick={()=>{setForm(h);setErr('');setModal(true);}}>✏️</button><button style={S.btnR} onClick={()=>del(h.id)}>🗑</button></div></td></tr>);})}</tbody></table></div>
+    <tbody>{[...hasarlar].sort((a,b)=>b.tarih?.localeCompare(a.tarih)).map(h=>{const a=araclar.find(x=>x.id===h.aracId);return(<tr key={h.id}><td style={S.td}><strong style={{color:C.white}}>{a?.ad||'—'}</strong></td><td style={S.td}>{fmtDate(h.tarih)}</td><td style={S.td}><span style={{fontSize:12}}>{h.aciklama}</span>{(h.fotograflar||[]).length>0&&<span title={`${h.fotograflar.length} fotoğraf`} style={{marginLeft:6}}>📷{h.fotograflar.length}</span>}</td><td style={S.td}>{fmtTL(h.maliyet)}</td><td style={S.td}><span style={{color:C.green}}>{fmtTL(h.tazminat)}</span></td><td style={S.td}><Badge d={h.durum}/></td><td style={S.td}><div style={{display:'flex',gap:5}}><button style={S.btnO} onClick={()=>{setForm(h);setErr('');setModal(true);}}>✏️</button><button style={S.btnR} onClick={()=>del(h.id)}>🗑</button></div></td></tr>);})}</tbody></table></div>
     {modal&&(<Modal title={form.id?'Hasar Düzenle':'Yeni Hasar'} onClose={()=>setModal(false)}>
       <FG label="Araç"><select style={S.sel} value={form.aracId||''} onChange={e=>setForm(f=>({...f,aracId:idVal(e.target.value)}))}><option value="">— Seçiniz —</option>{araclar.map(a=><option key={a.id} value={a.id}>{a.ad}</option>)}</select></FG>
       <div style={S.g2}><FG label="Tarih"><input type="date" style={S.inp} value={form.tarih||''} onChange={e=>setForm(f=>({...f,tarih:e.target.value}))}/></FG><FG label="Sigorta Poliçe No"><input style={S.inp} value={form.sigortaNo||''} onChange={e=>setForm(f=>({...f,sigortaNo:e.target.value}))}/></FG></div>
       <FG label="Açıklama"><textarea style={S.ta} value={form.aciklama||''} onChange={e=>setForm(f=>({...f,aciklama:e.target.value}))}/></FG>
       <div style={S.g2}><FG label="Maliyet (₺)"><input type="number" style={S.inp} value={form.maliyet||''} onChange={e=>setForm(f=>({...f,maliyet:+e.target.value}))}/></FG><FG label="Tazminat (₺)"><input type="number" style={S.inp} value={form.tazminat||''} onChange={e=>setForm(f=>({...f,tazminat:+e.target.value}))}/></FG></div>
       <FG label="Durum"><select style={S.sel} value={form.durum||'acik'} onChange={e=>setForm(f=>({...f,durum:e.target.value}))}><option value="acik">Açık</option><option value="devamediyor">Devam Ediyor</option><option value="kapandi">Kapandı</option></select></FG>
+      <FG label="Hasar Fotoğrafları">
+        <input type="file" accept="image/*" multiple style={S.inp} onChange={async e=>{
+          const dosyalar=Array.from(e.target.files||[]);
+          e.target.value='';
+          for(const dosya of dosyalar){
+            try{
+              const veri=await resimSikistir(dosya);
+              setForm(f=>({...f,fotograflar:[...(f.fotograflar||[]),{id:uid(),ad:dosya.name,veri,tarih:today()}]}));
+            }catch(err){fpToast(err.message||'Fotoğraf eklenemedi.','error');}
+          }
+        }}/>
+        {(form.fotograflar||[]).length>0&&<div style={{marginTop:10,display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(90px,1fr))',gap:8}}>
+          {form.fotograflar.map(p=>(<div key={p.id} style={{position:'relative'}}>
+            <a href={p.veri} target="_blank" rel="noopener noreferrer"><img src={p.veri} alt={p.ad} style={{width:'100%',height:80,objectFit:'cover',borderRadius:6,border:`1px solid ${C.border}`}}/></a>
+            <button type="button" style={{position:'absolute',top:2,right:2,background:'rgba(0,0,0,.6)',color:'#fff',border:'none',borderRadius:4,width:20,height:20,fontSize:11,cursor:'pointer',lineHeight:1}} onClick={()=>setForm(f=>({...f,fotograflar:f.fotograflar.filter(x=>x.id!==p.id)}))}>✕</button>
+          </div>))}
+        </div>}
+        <div style={{fontSize:11,color:C.muted,marginTop:6}}>ℹ️ Fotoğraflar otomatik küçültülerek saklanır (yavaş internet/az yer kullanımı için).</div>
+      </FG>
       <FormError msg={err}/>
       <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginTop:8}}><button style={S.btnO} onClick={()=>setModal(false)}>İptal</button><button style={S.btn()} onClick={save}>Kaydet</button></div>
     </Modal>)}
@@ -5691,18 +5734,19 @@ function AracMaliyetAnalizi(){
     const yakit=yakitlar.filter(y=>y.aracId===a.id).reduce((s,y)=>s+(+y.toplam||0),0);
     const bakim=bakimlar.filter(b=>b.aracId===a.id&&b.durum==='tamamlandi').reduce((s,b)=>s+(+b.maliyet||0),0);
     const hasarNet=hasarlar.filter(h=>h.aracId===a.id).reduce((s,h)=>s+Math.max(0,(+h.maliyet||0)-(+h.tazminat||0)),0);
+    const sigorta=+a.sigortaPrim||0;
     const yasYil=a.yil?Math.max(0,new Date().getFullYear()-a.yil):null;
     const yillikAmortisman=a.alisFiyat?(+a.alisFiyat/omurYil):0;
     const amortisman=yasYil!=null?Math.min(+a.alisFiyat||0,yillikAmortisman*Math.min(yasYil,omurYil)):0;
-    const toplam=yakit+bakim+hasarNet+amortisman;
+    const toplam=yakit+bakim+hasarNet+sigorta+amortisman;
     const saatBasi=a.saat>0?toplam/a.saat:null;
-    return{a,yakit,bakim,hasarNet,amortisman,toplam,saatBasi};
+    return{a,yakit,bakim,hasarNet,sigorta,amortisman,toplam,saatBasi};
   }).sort((x,y)=>siralama==='toplam'?y.toplam-x.toplam:siralama==='yakit'?y.yakit-x.yakit:y.bakim-x.bakim);
 
   const genelToplam=veri.reduce((s,v)=>s+v.toplam,0);
 
   return(<div>
-    <InfoBox color={C.blue}>ℹ️ Amortisman, alış fiyatı üzerinden doğrusal ve <strong>tahmini</strong> olarak hesaplanır (varsayılan {omurYil} yıl ömür — Ayarlar &gt; Genel'den değiştirilebilir). Sigorta <strong>primi</strong> hiçbir modülde ayrı bir gider olarak tutulmadığından (sadece bitiş tarihi takip ediliyor) toplam maliyete dahil edilmemiştir.</InfoBox>
+    <InfoBox color={C.blue}>ℹ️ Amortisman, alış fiyatı üzerinden doğrusal ve <strong>tahmini</strong> olarak hesaplanır (varsayılan {omurYil} yıl ömür — Ayarlar &gt; Genel'den değiştirilebilir). Sigorta primi, araç kartına girdiğiniz <strong>yıllık</strong> prim tutarı üzerinden dahil edilir (prim girilmemiş araçlarda 0 sayılır — Araç Yönetimi &gt; Araçlar'dan girebilirsiniz).</InfoBox>
     <div style={S.g3}>
       <StatCard color={C.accent} value={fmtTL(genelToplam)} label="Filo Toplam Maliyeti"/>
       <StatCard color={C.red} value={veri[0]?.a.ad||'—'} label="En Maliyetli Araç"/>
@@ -5711,9 +5755,9 @@ function AracMaliyetAnalizi(){
     {hasRC&&veri.length>0&&<div style={{...S.card,marginBottom:16}}>
       <div style={S.secTitle}>📊 Araç Başına Toplam Maliyet</div>
       <ResponsiveContainer width="100%" height={Math.max(160,veri.length*40)}>
-        <BarChart data={veri.map(v=>({ad:v.a.ad,Yakıt:v.yakit,Bakım:v.bakim,Hasar:v.hasarNet,Amortisman:Math.round(v.amortisman)}))} layout="vertical" margin={{left:10}}>
+        <BarChart data={veri.map(v=>({ad:v.a.ad,Yakıt:v.yakit,Bakım:v.bakim,Hasar:v.hasarNet,Sigorta:v.sigorta,Amortisman:Math.round(v.amortisman)}))} layout="vertical" margin={{left:10}}>
           <CartesianGrid strokeDasharray="3 3" stroke={C.border} horizontal={false}/><XAxis type="number" tick={{fill:C.muted,fontSize:10}} tickFormatter={v=>(v/1000)+'K'}/><YAxis type="category" dataKey="ad" width={130} tick={{fill:C.text,fontSize:11}}/><Tooltip contentStyle={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,fontSize:12}} formatter={v=>fmtTL(v)}/><Legend wrapperStyle={{fontSize:11}}/>
-          <Bar dataKey="Yakıt" stackId="a" fill={C.accent}/><Bar dataKey="Bakım" stackId="a" fill={C.blue}/><Bar dataKey="Hasar" stackId="a" fill={C.red}/><Bar dataKey="Amortisman" stackId="a" fill={C.muted} radius={[0,4,4,0]}/>
+          <Bar dataKey="Yakıt" stackId="a" fill={C.accent}/><Bar dataKey="Bakım" stackId="a" fill={C.blue}/><Bar dataKey="Hasar" stackId="a" fill={C.red}/><Bar dataKey="Sigorta" stackId="a" fill={C.purple}/><Bar dataKey="Amortisman" stackId="a" fill={C.muted} radius={[0,4,4,0]}/>
         </BarChart>
       </ResponsiveContainer>
     </div>}
@@ -5726,18 +5770,19 @@ function AracMaliyetAnalizi(){
             baslik:'Araç Maliyet Analizi Raporu',
             altBaslik:`${veri.length} araç — ${today()}`,
             ozetKartlari:[{value:fmtTL(genelToplam),label:'Filo Toplam Maliyeti'},{value:fmtTL(genelToplam/(araclar.length||1)),label:'Araç Başına Ortalama'}],
-            headers:['Araç','Tip','Yakıt','Bakım','Hasar (Net)','Amortisman (Tahmini)','Toplam','Saat Başına'],
-            rows:veri.map(v=>[v.a.ad,v.a.tip,fmtTL(v.yakit),fmtTL(v.bakim),fmtTL(v.hasarNet),fmtTL(v.amortisman),fmtTL(v.toplam),v.saatBasi!=null?fmtTL(v.saatBasi)+'/sa':'—']),
-            notlar:`Amortisman tahminidir (alış fiyatı üzerinden doğrusal, ${omurYil} yıl ömür varsayımıyla). Sigorta primi hiçbir modülde ayrı bir gider olarak tutulmadığından dahil edilmemiştir.`,
+            headers:['Araç','Tip','Yakıt','Bakım','Hasar (Net)','Sigorta (Yıllık Prim)','Amortisman (Tahmini)','Toplam','Saat Başına'],
+            rows:veri.map(v=>[v.a.ad,v.a.tip,fmtTL(v.yakit),fmtTL(v.bakim),fmtTL(v.hasarNet),fmtTL(v.sigorta),fmtTL(v.amortisman),fmtTL(v.toplam),v.saatBasi!=null?fmtTL(v.saatBasi)+'/sa':'—']),
+            notlar:`Amortisman tahminidir (alış fiyatı üzerinden doğrusal, ${omurYil} yıl ömür varsayımıyla). Sigorta primi araç kartına girilen yıllık tutardır; girilmemiş araçlarda 0 sayılmıştır.`,
           })}>🖨️ PDF Rapor</button>
         </div>
       </div>
-      <table style={S.tbl}><thead><tr><th style={S.th}>Araç</th><th style={S.th}>Yakıt</th><th style={S.th}>Bakım</th><th style={S.th}>Hasar (Net)</th><th style={S.th}>Amortisman (Tahmini)</th><th style={S.th}>Toplam</th><th style={S.th}>Saat Başına</th></tr></thead>
+      <table style={S.tbl}><thead><tr><th style={S.th}>Araç</th><th style={S.th}>Yakıt</th><th style={S.th}>Bakım</th><th style={S.th}>Hasar (Net)</th><th style={S.th}>Sigorta</th><th style={S.th}>Amortisman (Tahmini)</th><th style={S.th}>Toplam</th><th style={S.th}>Saat Başına</th></tr></thead>
       <tbody>{veri.map(v=>(<tr key={v.a.id}>
         <td style={S.td}><strong style={{color:C.white}}>{v.a.ad}</strong><div style={{fontSize:11,color:C.muted}}>{v.a.tip}</div></td>
         <td style={S.td}>{fmtTL(v.yakit)}</td>
         <td style={S.td}>{fmtTL(v.bakim)}</td>
         <td style={S.td}>{v.hasarNet>0?<span style={{color:C.red}}>{fmtTL(v.hasarNet)}</span>:'—'}</td>
+        <td style={S.td}>{v.sigorta>0?fmtTL(v.sigorta):'—'}</td>
         <td style={S.td}>{fmtTL(v.amortisman)}</td>
         <td style={S.td}><strong style={{color:C.accent}}>{fmtTL(v.toplam)}</strong></td>
         <td style={S.td}>{v.saatBasi!=null?fmtTL(v.saatBasi)+'/sa':'—'}</td>
@@ -6579,6 +6624,90 @@ function KonumTakip(){
   </div>);
 }
 
+// ── Toplu Duyuru (E-posta / WhatsApp) ────────────────────────────────────────────
+// E-posta: mailto: linkine BCC olarak eklenip TEK seferde (varsayılan mail uygulamasından)
+// gönderilebilir — gerçekten topludur. WhatsApp: wa.me linkleri sessizce/otomatik
+// gönderilemediği için (tarayıcı kısıtı, uygulama genelinde tutarlı olarak belirtiliyor),
+// bunun yerine bir "gönderim kuyruğu" sunulur — her alıcı için tek tıkla açıp gönderirsiniz.
+function TopluDuyuru(){
+  const personel=LS.get('personel').filter(p=>p.durum==='aktif');
+  const cariler=LS.get('cariler');
+  const musteriler=cariler.filter(c=>(c.tipler||[]).includes('musteri'));
+  const tedarikciler=cariler.filter(c=>(c.tipler||[]).includes('tedarikci'));
+  const [hedefKitle,setHedefKitle]=useState('personel');
+  const [secili,setSecili]=useState(new Set());
+  const [konu,setKonu]=useState('');
+  const [mesaj,setMesaj]=useState('');
+  const [gonderilenler,setGonderilenler]=useState(new Set());
+
+  const liste=hedefKitle==='personel'?personel:hedefKitle==='musteri'?musteriler:tedarikciler;
+  useEffect(()=>{setSecili(new Set());setGonderilenler(new Set());},[hedefKitle]);
+
+  const tumunuSecToggle=()=>{
+    if(secili.size===liste.length)setSecili(new Set());
+    else setSecili(new Set(liste.map(x=>x.id)));
+  };
+  const birSecToggle=(id)=>{
+    const n=new Set(secili);
+    n.has(id)?n.delete(id):n.add(id);
+    setSecili(n);
+  };
+
+  const seciliKisiler=liste.filter(x=>secili.has(x.id));
+  const emailliKisiler=seciliKisiler.filter(x=>x.email?.trim());
+  const telliKisiler=seciliKisiler.filter(x=>x.tel?.trim());
+
+  const epostaGonder=()=>{
+    if(!emailliKisiler.length){fpToast('Seçili kişilerden hiçbirinin e-posta adresi kayıtlı değil.','error');return;}
+    const bcc=emailliKisiler.map(x=>x.email.trim()).join(',');
+    const link=`mailto:?bcc=${encodeURIComponent(bcc)}&subject=${encodeURIComponent(konu)}&body=${encodeURIComponent(mesaj)}`;
+    if(link.length>1800)fpToast('⚠️ Alıcı/mesaj çok uzun, bazı mail uygulamaları bunu kesebilir. Az sayıda kişiyle deneyin.','error');
+    window.location.href=link;
+  };
+  const whatsappGonder=(kisi)=>{
+    const link=whatsappLinkOlustur(kisi.tel,mesaj);
+    if(!link){fpToast('Geçersiz telefon numarası.','error');return;}
+    window.open(link,'_blank');
+    setGonderilenler(g=>new Set([...g,kisi.id]));
+  };
+
+  return(<div>
+    <InfoBox color={C.blue}>ℹ️ <strong>E-posta</strong> gerçekten topludur — seçtiğiniz herkese tek seferde (varsayılan mail uygulamanızdan, BCC olarak) gider. <strong>WhatsApp</strong> ise tarayıcı kısıtı nedeniyle otomatik/sessiz gönderilemez (wa.me bir API değildir); bunun yerine her alıcı için tek tıkla açıp gönderebileceğiniz bir kuyruk sunulur.</InfoBox>
+    <div style={S.card}>
+      <div style={S.secTitle}>🎯 Hedef Kitle</div>
+      <TabBar tabs={[['personel',`🧑‍💼 Personel (${personel.length})`],['musteri',`🧾 Müşteriler (${musteriler.length})`],['tedarikci',`🏭 Tedarikçiler (${tedarikciler.length})`]]} active={hedefKitle} onChange={setHedefKitle}/>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',margin:'14px 0 8px'}}>
+        <button style={S.btnO} onClick={tumunuSecToggle}>{secili.size===liste.length&&liste.length>0?'Tümünü Kaldır':'Tümünü Seç'}</button>
+        <span style={{fontSize:12,color:C.muted}}>{secili.size} / {liste.length} seçili</span>
+      </div>
+      <div style={{maxHeight:240,overflowY:'auto',border:`1px solid ${C.border}`,borderRadius:8,padding:8}}>
+        {liste.map(x=>(<label key={x.id} style={{display:'flex',alignItems:'center',gap:8,padding:'6px 4px',fontSize:13,color:C.text,cursor:'pointer'}}>
+          <input type="checkbox" checked={secili.has(x.id)} onChange={()=>birSecToggle(x.id)}/>
+          <span style={{flex:1}}>{x.ad}</span>
+          <span style={{fontSize:11,color:C.muted}}>{x.email?'📧':''} {x.tel?'📲':''}</span>
+        </label>))}
+        {liste.length===0&&<div style={{textAlign:'center',color:C.muted,padding:16,fontSize:13}}>Kayıt yok.</div>}
+      </div>
+    </div>
+    <div style={S.card}>
+      <div style={S.secTitle}>✉️ Mesaj</div>
+      <FG label="Konu (yalnızca e-posta için)"><input style={S.inp} value={konu} onChange={e=>setKonu(e.target.value)}/></FG>
+      <FG label="Mesaj Metni"><textarea style={{...S.ta,minHeight:120}} value={mesaj} onChange={e=>setMesaj(e.target.value)}/></FG>
+      <button style={S.btn()} onClick={epostaGonder} disabled={!mesaj.trim()||emailliKisiler.length===0}>📧 {emailliKisiler.length} Kişiye E-posta Gönder</button>
+      {seciliKisiler.length>0&&seciliKisiler.length!==emailliKisiler.length&&<div style={{fontSize:11,color:C.yellow,marginTop:6}}>⚠️ Seçili {seciliKisiler.length} kişiden {seciliKisiler.length-emailliKisiler.length} tanesinin e-posta adresi yok, e-postaya dahil edilmeyecek.</div>}
+    </div>
+    {telliKisiler.length>0&&<div style={S.card}>
+      <div style={S.secTitle}>📲 WhatsApp Gönderim Kuyruğu ({gonderilenler.size}/{telliKisiler.length} gönderildi)</div>
+      <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Her satırdaki butona basınca WhatsApp'ta o kişiyle sohbet, mesaj hazır şekilde açılır — siz "Gönder"e basarsınız.</div>
+      {telliKisiler.map(x=>(<div key={x.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:`1px solid ${C.border}22`}}>
+        <span style={{fontSize:13,color:C.text}}>{gonderilenler.has(x.id)?'✅':'⬜'} {x.ad}</span>
+        <button style={gonderilenler.has(x.id)?S.btnO:S.btn(C.green)} onClick={()=>whatsappGonder(x)} disabled={!mesaj.trim()}>{gonderilenler.has(x.id)?'🔁 Tekrar Gönder':'📲 Gönder'}</button>
+      </div>))}
+    </div>}
+  </div>);
+}
+
+
 // ── Pages Config ──────────────────────────────────────────────────────────────
 const PAGES=[
   {group:'',items:[
@@ -6586,6 +6715,7 @@ const PAGES=[
     {id:'isemri',label:'İş Emirleri',icon:'📌',comp:IsEmirleri},
     {id:'arac',label:'Araç Yönetimi',icon:'🚜',comp:AracYonetimi},
     {id:'konum',label:'Konum & Sürücü Takip',icon:'📍',comp:KonumTakip},
+    {id:'duyuru',label:'Toplu Duyuru',icon:'📢',comp:TopluDuyuru},
     {id:'muhasebe',label:'Muhasebe',icon:'💰',comp:Muhasebe},
     {id:'ik',label:'İnsan Kaynakları',icon:'🧑‍💼',comp:InsanKaynaklari},
     {id:'gorevler',label:'Görevler',icon:'✅',comp:Gorevler},
@@ -6606,8 +6736,8 @@ const ESKI_SAYFA_YONLENDIRME={bakim:'arac',yakit:'arac',evrak:'arac',hasar:'arac
 // sayfalar: '*' → tüm sayfalara erişim; aksi halde erişilebilir sayfa id'lerinin listesi.
 const ROL_TANIMLARI = {
   admin:      {renkKey:'red',    label:'Admin',        aciklama:'Tüm modüllere tam erişim.',                                  sayfalar:'*'},
-  muhasebe:   {renkKey:'purple', label:'Muhasebe',     aciklama:'Gelir-gider, fatura, kasa-banka ve ilgili raporlar.',        sayfalar:['dashboard','muhasebe','arac','proje','depo','bekciler','ayarlar']},
-  sef:        {renkKey:'blue',   label:'Şef',          aciklama:'Araç, bakım, iş emirleri, personel ve saha yönetimi.',       sayfalar:['dashboard','arac','konum','isemri','gorevler','ik','depo','bekciler']},
+  muhasebe:   {renkKey:'purple', label:'Muhasebe',     aciklama:'Gelir-gider, fatura, kasa-banka ve ilgili raporlar.',        sayfalar:['dashboard','muhasebe','arac','proje','depo','bekciler','duyuru','ayarlar']},
+  sef:        {renkKey:'blue',   label:'Şef',          aciklama:'Araç, bakım, iş emirleri, personel ve saha yönetimi.',       sayfalar:['dashboard','arac','konum','isemri','gorevler','ik','depo','bekciler','duyuru']},
   operator:   {renkKey:'green',  label:'Operatör',     aciklama:'Sadece saha girişleri ve temel görünüm.',                    sayfalar:['dashboard','arac','konum','akaryakit','gorevler']},
   saltokunur: {renkKey:'muted',  label:'Salt Okunur',  aciklama:'Her şeyi görebilir, hiçbir veriyi ekleyemez/düzenleyemez/silemez. Muhasebeci, yatırımcı veya denetçiye erişim vermek için idealdir.', sayfalar:'*'},
 };
