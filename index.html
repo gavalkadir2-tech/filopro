@@ -1473,8 +1473,12 @@ function GlobalSearch({onNavigate}){
 
 // ── PAGES ─────────────────────────────────────────────────────────────────────
 
+const fpNav=(pageId)=>window.dispatchEvent(new CustomEvent('fp-navigate',{detail:pageId}));
+
 function Dashboard(){
   const araclar=LS.get('araclar'),bakimlar=LS.get('bakimlar'),yakitlar=LS.get('yakitlar'),personel=LS.get('personel'),gelirGider=LS.get('gelirGider'),isemirleri=LS.get('isemirleri'),izinler=LS.get('izinler'),mesailer=LS.get('mesailer'),adaylar=LS.get('adaylar'),isGuvenligiOlaylari=LS.get('isGuvenligiOlaylari');
+  const cariler=LS.get('cariler'),faturalar=LS.get('faturalar'),hareketler=LS.get('kasaHareketleri'),gorevler=LS.get('gorevler'),islemLoglari=LS.get('islemLoglari'),konumlar=LS.get('konumlar')||[];
+  const degerlendirmeler=LS.get('degerlendirmeler');
   const aktifArac=araclar.filter(a=>a.durum==='aktif').length,bakimdaArac=araclar.filter(a=>a.durum==='bakimda').length,hurdaArac=araclar.filter(a=>a.durum==='hurda').length,bekleyenBakim=bakimlar.filter(b=>b.durum==='bekliyor').length;
   const buAyYakit=yakitlar.filter(y=>y.tarih?.startsWith(today().slice(0,7))).reduce((s,y)=>s+(+y.toplam||0),0);
   const buAyGelir=gelirGider.filter(g=>g.tur==='gelir'&&g.tarih?.startsWith(today().slice(0,7))).reduce((s,g)=>s+(+g.tutar||0),0);
@@ -1487,25 +1491,70 @@ function Dashboard(){
     const gi=gelirGider.filter(x=>x.tarih?.startsWith(ay)&&x.tur==='gider').reduce((s,x)=>s+(+x.tutar||0),0);
     return{ay:fmtMonth(ay).split(' ')[0],net:g-gi};
   });
+  const yakitAylikVeri=months().map(ay=>({ay:fmtMonth(ay).split(' ')[0],yakit:yakitlar.filter(y=>y.tarih?.startsWith(ay)).reduce((s,y)=>s+(+y.toplam||0),0)}));
   const filoDagilim=[{name:'Aktif',value:aktifArac,c:C.green},{name:'Bakımda',value:bakimdaArac,c:C.yellow},{name:'Hurda',value:hurdaArac,c:C.red}].filter(f=>f.value>0);
   const enCokCalisanlar=[...araclar].sort((a,b)=>(+b.saat||0)-(+a.saat||0)).slice(0,5);
   const tooltipStyle={background:C.card,border:`1px solid ${C.border}`,borderRadius:8,fontSize:12,color:C.text};
+  // Açık alacak/borç: her cariyi kendi tipine (müşteri/tedarikçi) göre bakiye hesabına sokar, ikisi de olabilir.
+  let toplamAlacak=0,toplamBorc=0;
+  cariler.forEach(c=>{
+    if((c.tipler||[]).includes('musteri'))toplamAlacak+=Math.max(0,musteriBakiye(c.id,faturalar,hareketler).bakiye);
+    if((c.tipler||[]).includes('tedarikci'))toplamBorc+=Math.max(0,tedarikciBakiye(c.id,faturalar,hareketler).bakiye);
+  });
+  const acikGorevler=gorevler.filter(g=>g.durum!=='tamamlandi');
+  const gecikenGorevler=gorevler.filter(g=>g.durum!=='tamamlandi'&&g.bitis&&daysLeft(g.bitis)<0);
+  const canliKonumAktif=konumlar.filter(k=>(Date.now()-new Date(k.guncellendi).getTime())/60000<30).length;
+  const sonIslemler=[...islemLoglari].slice(0,6);
+  // En çok çalışan personel: onaylı mesai kayıtlarındaki çalışılan saatler personel bazında toplanır.
+  const personelSaatMap={};
+  mesailer.filter(m=>m.durum==='onaylandi').forEach(m=>{personelSaatMap[m.personelId]=(personelSaatMap[m.personelId]||0)+(+m.calisilanSaat||0);});
+  const enCokCalisanPersonel=Object.entries(personelSaatMap).map(([pid,saat])=>({ad:personel.find(p=>p.id===idVal(pid))?.ad||'—',saat})).filter(p=>p.ad!=='—').sort((a,b)=>b.saat-a.saat).slice(0,5);
+  // Ayın personeli: her personelin EN SON değerlendirmesindeki 4 puanın (verimlilik, iş
+  // kalitesi, devam/disiplin, ekip uyumu) ortalaması esas alınır — ömür boyu ortalama değil,
+  // güncel/en taze performans. En yüksek puanlı aktif personel öne çıkarılır.
+  const sonDegerlendirmeMap={};
+  [...degerlendirmeler].sort((a,b)=>(a.tarih||'').localeCompare(b.tarih||'')).forEach(d=>{sonDegerlendirmeMap[d.personelId]=d;});
+  const ayinPersoneli=Object.values(sonDegerlendirmeMap).map(d=>({p:personel.find(x=>x.id===idVal(d.personelId)),puan:((+d.verimlilik||0)+(+d.isKalitesi||0)+(+d.devamDisiplin||0)+(+d.ekipUyumu||0))/4,tarih:d.tarih})).filter(x=>x.p&&x.p.durum==='aktif').sort((a,b)=>b.puan-a.puan)[0];
+  const KART=({children,onClick,...p})=><div style={{...S.card,...(onClick?{cursor:'pointer'}:{})}} onClick={onClick} {...p}>{children}</div>;
   return(<div className="fp-fade">
+    <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:16}}>
+      <button style={S.btn()} onClick={()=>fpNav('isemri')}>📌 İş Emri Oluştur</button>
+      <button style={S.btnO} onClick={()=>fpNav('gorevler')}>✅ Görev Ekle</button>
+      <button style={S.btnO} onClick={()=>fpNav('muhasebe')}>💵 Tahsilat / Ödeme</button>
+      <button style={S.btnO} onClick={()=>fpNav('konum')}>📍 Canlı Konum</button>
+      <button style={S.btnO} onClick={()=>fpNav('arac')}>🚜 Araç Yönetimi</button>
+    </div>
     <div style={S.g4}>
       <StatCard color={C.green} value={aktifArac} label="Aktif Araç" sub={`${araclar.length} toplam`}/>
       <StatCard color={C.yellow} value={bakimdaArac} label="Bakımda" sub={`${bekleyenBakim} bekleyen bakım`}/>
       <StatCard color={C.accent} value={fmtTL(buAyYakit)} label="Bu Ay Yakıt"/>
       <StatCard color={buAyGelir-buAyGider>=0?C.green:C.red} value={fmtTL(buAyGelir-buAyGider)} label="Bu Ay Net" sub={`G:${fmtTL(buAyGelir)} / G:${fmtTL(buAyGider)}`}/>
     </div>
+    <div style={S.g4}>
+      <StatCard color={C.yellow} value={fmtTL(toplamAlacak)} label="Toplam Açık Alacak"/>
+      <StatCard color={C.red} value={fmtTL(toplamBorc)} label="Toplam Açık Borç"/>
+      <StatCard color={C.blue} value={acikGorevler.length} label="Açık Görev" sub={gecikenGorevler.length>0?`${gecikenGorevler.length} gecikmiş`:'Gecikmiş yok'}/>
+      <StatCard color={C.green} value={canliKonumAktif} label="Canlı Konum Paylaşan" sub="Son 30 dk"/>
+    </div>
     <div style={S.g2}>
-      <div style={S.card}>
+      <KART>
         <div style={S.secTitle}>⚠️ Sistem Uyarıları {uyarilar.length>0&&<span style={S.badge(C.red)}>{uyarilar.length}</span>}</div>
         {uyarilar.length===0?<div style={{color:C.muted,fontSize:13}}>Aktif uyarı yok, her şey yolunda ✅</div>:uyarilar.slice(0,6).map((u,i)=>(<div key={i} style={S.alert(u.c)}><span>{u.icon}</span><strong>{u.tip}</strong>&nbsp;— {u.baslik}: {u.gun<=0?'SÜRESİ DOLDU':`${u.gun} gün kaldı`}</div>))}
-      </div>
-      <div style={S.card}>
+      </KART>
+      <KART onClick={()=>fpNav('isemri')}>
         <div style={S.secTitle}>📌 Açık İş Emirleri {acikIsler.length>0&&<span style={S.badge(C.blue)}>{acikIsler.length}</span>}</div>
         {acikIsler.length===0?<div style={{color:C.muted,fontSize:13}}>Açık iş emri yok.</div>:acikIsler.slice(0,6).map(i=>{const a=araclar.find(x=>x.id===i.aracId);return(<div key={i.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:`1px solid ${C.border}22`}}><div><div style={{color:C.white,fontSize:13,fontWeight:600}}>{i.baslik}</div><div style={{fontSize:11,color:C.muted}}>{a?.ad||'—'}</div></div><Badge d={i.durum}/></div>);})}
-      </div>
+      </KART>
+    </div>
+    <div style={S.g2}>
+      <KART onClick={()=>fpNav('gorevler')}>
+        <div style={S.secTitle}>✅ Görevler {gecikenGorevler.length>0&&<span style={S.badge(C.red)}>{gecikenGorevler.length} gecikmiş</span>}</div>
+        {acikGorevler.length===0?<div style={{color:C.muted,fontSize:13}}>Açık görev yok ✅</div>:[...acikGorevler].sort((a,b)=>(a.bitis||'9999').localeCompare(b.bitis||'9999')).slice(0,6).map(g=>{const gec=g.bitis&&daysLeft(g.bitis)<0;return(<div key={g.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:`1px solid ${C.border}22`}}><div style={{color:C.white,fontSize:13,fontWeight:600}}>{g.baslik}</div><span style={{fontSize:11,color:gec?C.red:C.muted}}>{g.bitis?fmtDate(g.bitis):'—'}{gec?' ⚠️':''}</span></div>);})}
+      </KART>
+      <KART>
+        <div style={S.secTitle}>🕒 Son İşlemler</div>
+        {sonIslemler.length===0?<div style={{color:C.muted,fontSize:13}}>Henüz işlem kaydı yok.</div>:sonIslemler.map(l=>(<div key={l.id} style={{padding:'7px 0',borderBottom:`1px solid ${C.border}22`}}><div style={{fontSize:12,color:C.text}}><strong style={{color:C.accent}}>{l.islem}</strong></div><div style={{fontSize:11,color:C.muted,marginTop:1}}>{l.detay}</div><div style={{fontSize:10,color:C.muted,marginTop:1}}>{l.kullanici} · {l.tarih}</div></div>))}
+      </KART>
     </div>
     <div style={S.g2}>
       <div style={S.card}>
@@ -1515,16 +1564,56 @@ function Dashboard(){
         </ResponsiveContainer>)}
       </div>
       <div style={S.card}>
+        <div style={S.secTitle}>⛽ Son 6 Ay Yakıt Gideri</div>
+        {!hasRC?<div style={{color:C.muted,fontSize:13}}>Grafik kütüphanesi yüklenemedi.</div>:(<ResponsiveContainer width="100%" height={200}>
+          <BarChart data={yakitAylikVeri}><CartesianGrid strokeDasharray="3 3" stroke={C.border}/><XAxis dataKey="ay" tick={{fill:C.muted,fontSize:11}}/><YAxis tick={{fill:C.muted,fontSize:10}} tickFormatter={v=>(v/1000)+'K'}/><Tooltip contentStyle={tooltipStyle} formatter={v=>fmtTL(v)}/><Bar dataKey="yakit" name="Yakıt" fill={C.accent} radius={[4,4,0,0]}/></BarChart>
+        </ResponsiveContainer>)}
+      </div>
+    </div>
+    <div style={S.g2}>
+      <div style={S.card}>
         <div style={S.secTitle}>🥧 Filo Durum Dağılımı</div>
         {!hasRC||filoDagilim.length===0?<div style={{color:C.muted,fontSize:13}}>Veri yok.</div>:(<ResponsiveContainer width="100%" height={200}>
           <PieChart><Pie data={filoDagilim} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={40} outerRadius={72} paddingAngle={3} label={({name,value})=>`${name}: ${value}`} labelLine={false} fontSize={11}>{filoDagilim.map((f,i)=><Cell key={i} fill={f.c}/>)}</Pie><Tooltip contentStyle={tooltipStyle}/></PieChart>
         </ResponsiveContainer>)}
       </div>
+      {enCokCalisanlar.length>0&&<div style={S.card}>
+        <div style={S.secTitle}>🏆 En Çok Çalışan Araçlar (Saat)</div>
+        {!hasRC?<div style={{color:C.muted,fontSize:13}}>Grafik kütüphanesi yüklenemedi.</div>:(<ResponsiveContainer width="100%" height={Math.max(140,enCokCalisanlar.length*44)}>
+          <BarChart data={enCokCalisanlar.map(a=>({ad:a.ad,saat:+a.saat||0}))} layout="vertical" margin={{left:10}}>
+            <CartesianGrid strokeDasharray="3 3" stroke={C.border} horizontal={false}/><XAxis type="number" tick={{fill:C.muted,fontSize:10}}/><YAxis type="category" dataKey="ad" width={110} tick={{fill:C.text,fontSize:11}}/><Tooltip contentStyle={tooltipStyle} formatter={v=>fmtNum(v,'sa')}/><Bar dataKey="saat" fill={C.accent} radius={[0,4,4,0]}/>
+          </BarChart>
+        </ResponsiveContainer>)}
+      </div>}
     </div>
     <div style={S.card}>
       <div style={S.secTitle}>🚜 Araç Durum Özeti</div>
       <table style={S.tbl}><thead><tr><th style={S.th}>Araç</th><th style={S.th}>Tip</th><th style={S.th}>Marka/Model</th><th style={S.th}>Saat</th><th style={S.th}>Km</th><th style={S.th}>Durum</th></tr></thead>
       <tbody>{araclar.map(a=>{return(<tr key={a.id}><td style={S.td}><strong style={{color:C.white}}>{a.ad}</strong></td><td style={S.td}>{a.tip}</td><td style={S.td}>{a.markaModel||'—'}</td><td style={S.td}>{a.saat?.toLocaleString('tr-TR')||'—'} sa</td><td style={S.td}>{a.km?.toLocaleString('tr-TR')||'—'} km</td><td style={S.td}><Badge d={a.durum}/></td></tr>);})}</tbody></table>
+    </div>
+    <div style={S.g2}>
+      <div style={S.card}>
+        <div style={S.secTitle}>🌟 Ayın Personeli</div>
+        {!ayinPersoneli?<div style={{color:C.muted,fontSize:13}}>Henüz yeterli performans değerlendirmesi yok. <span onClick={()=>fpNav('ik')} style={{color:C.accent,cursor:'pointer',textDecoration:'underline'}}>Değerlendirme ekleyin →</span></div>:(
+          <div style={{display:'flex',alignItems:'center',gap:16,padding:'6px 0'}}>
+            <div style={{width:56,height:56,borderRadius:'50%',background:`${C.accent}22`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:26,flexShrink:0}}>🏆</div>
+            <div>
+              <div style={{fontSize:17,fontWeight:700,color:C.white}}>{ayinPersoneli.p.ad}</div>
+              <div style={{fontSize:12,color:C.muted,marginTop:2}}>{ayinPersoneli.p.pozisyon||ayinPersoneli.p.departman||'—'}</div>
+              <div style={{fontSize:13,color:C.accent,marginTop:6,fontWeight:600}}>⭐ {ayinPersoneli.puan.toFixed(1)} / 5.0 son performans puanı</div>
+              <div style={{fontSize:11,color:C.muted,marginTop:2}}>Değerlendirme: {fmtDate(ayinPersoneli.tarih)}</div>
+            </div>
+          </div>
+        )}
+      </div>
+      {enCokCalisanPersonel.length>0&&<div style={S.card}>
+        <div style={S.secTitle}>💪 En Çok Çalışan Personel (Onaylı Mesai, Saat)</div>
+        {!hasRC?<div style={{color:C.muted,fontSize:13}}>Grafik kütüphanesi yüklenemedi.</div>:(<ResponsiveContainer width="100%" height={Math.max(140,enCokCalisanPersonel.length*44)}>
+          <BarChart data={enCokCalisanPersonel} layout="vertical" margin={{left:10}}>
+            <CartesianGrid strokeDasharray="3 3" stroke={C.border} horizontal={false}/><XAxis type="number" tick={{fill:C.muted,fontSize:10}}/><YAxis type="category" dataKey="ad" width={110} tick={{fill:C.text,fontSize:11}}/><Tooltip contentStyle={tooltipStyle} formatter={v=>fmtNum(v,'sa')}/><Bar dataKey="saat" fill={C.green} radius={[0,4,4,0]}/>
+          </BarChart>
+        </ResponsiveContainer>)}
+      </div>}
     </div>
     <div style={S.card}>
       <div style={S.secTitle}>🧑‍💼 İnsan Kaynakları Özeti</div>
@@ -1535,16 +1624,9 @@ function Dashboard(){
         <StatCard color={C.red} value={isGuvenligiOlaylari.filter(o=>o.durum==='acik').length} label="Açık İş Güvenliği Kaydı"/>
       </div>
     </div>
-    {enCokCalisanlar.length>0&&<div style={S.card}>
-      <div style={S.secTitle}>🏆 En Çok Çalışan Araçlar (Saat)</div>
-      {!hasRC?<div style={{color:C.muted,fontSize:13}}>Grafik kütüphanesi yüklenemedi.</div>:(<ResponsiveContainer width="100%" height={Math.max(140,enCokCalisanlar.length*44)}>
-        <BarChart data={enCokCalisanlar.map(a=>({ad:a.ad,saat:+a.saat||0}))} layout="vertical" margin={{left:10}}>
-          <CartesianGrid strokeDasharray="3 3" stroke={C.border} horizontal={false}/><XAxis type="number" tick={{fill:C.muted,fontSize:10}}/><YAxis type="category" dataKey="ad" width={110} tick={{fill:C.text,fontSize:11}}/><Tooltip contentStyle={tooltipStyle} formatter={v=>fmtNum(v,'sa')}/><Bar dataKey="saat" fill={C.accent} radius={[0,4,4,0]}/>
-        </BarChart>
-      </ResponsiveContainer>)}
-    </div>}
   </div>);
 }
+
 
 function AraclarListesi(){
   const [araclar,setAraclar]=useState(LS.get('araclar'));
@@ -3947,6 +4029,7 @@ function YedekEmailAyarlari(){
 
 function SenkronPaneli(){
   const cfg=getSyncCfg();
+  const [status,setStatus]=useState(fpSyncStatus());
   const [mod,setMod]=useState('giris'); // 'giris' | 'kayit'
   const [url,setUrl]=useState(cfg.url||'');
   const [firma,setFirma]=useState('');
