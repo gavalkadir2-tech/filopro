@@ -3300,25 +3300,48 @@ const AI_HEDEF_BILGI = {
   izin:{ad:'İzin Talebi',icon:'🏖️',alanlar:[['personelId','Personel','personelSel'],['tur','İzin Türü','izintur'],['baslangic','Başlangıç','date'],['bitis','Bitiş','date'],['aciklama','Açıklama','text']]},
   mesai:{ad:'Mesai Kaydı',icon:'⏱️',alanlar:[['personelId','Personel','personelSel'],['tarih','Tarih','date'],['girisSaat','Giriş Saati','time'],['cikisSaat','Çıkış Saati','time'],['notlar','Notlar','text']]},
   gelirGider:{ad:'Gelir / Gider Kaydı',icon:'💰',alanlar:[['tur','Tür','tur'],['kategori','Kategori','text'],['aciklama','Açıklama','text'],['tutar','Tutar (₺)','number'],['kdv','KDV (₺)','number'],['tarih','Tarih','date']]},
+  gorev:{ad:'Görev',icon:'✅',alanlar:[['baslik','Başlık','text'],['personelId','Sorumlu Personel','personelSel'],['oncelik','Öncelik','oncelik'],['bitis','Bitiş Tarihi','date']]},
+  cari:{ad:'Yeni Cari (Müşteri/Tedarikçi)',icon:'👥',alanlar:[['ad','Cari Adı / Ünvanı','text'],['caritip','Tip','caritip'],['yetkili','Yetkili Kişi','text'],['tel','Telefon','text']]},
 };
-const AI_ORNEK_KOMUTLAR=['Bu ay yakıt gideri ne kadar?','Hangi araçların bakımı yaklaşıyor?','50 litre mazot ikmali ekle','Ali Demir için yarın izin talebi oluştur','Kadir Arslan için bugün mesai kaydı gir','Filoda kaç araç var?'];
+const AI_ORNEK_KOMUTLAR=['Bu ay yakıt gideri ne kadar?','Hangi araçların bakımı yaklaşıyor?','50 litre mazot ikmali ekle','Ali Demir için yarın izin talebi oluştur','Kadir Arslan için bugün mesai kaydı gir','Yarına "lastik siparişi ver" görevi ekle','Filoda kaç araç var?'];
+// Bas Konuş sesli ayarları (otomatik gönder / sesli yanıt), sayfa/global balon fark etmeksizin
+// aynı tercihi paylaşsın diye localStorage'da tutulur.
+const AI_SES_AYAR_KEY='fp_ai_ses_ayarlari';
+const aiSesAyarlariOku=()=>{try{const v=JSON.parse(localStorage.getItem(AI_SES_AYAR_KEY));return{otoGonder:v?.otoGonder??true,sesliYanit:v?.sesliYanit??false};}catch{return{otoGonder:true,sesliYanit:false};}};
+const aiSesAyarlariYaz=(kismi)=>{try{localStorage.setItem(AI_SES_AYAR_KEY,JSON.stringify({...aiSesAyarlariOku(),...kismi}));}catch{}};
 
 function YapayZeka(){
   const araclar=LS.get('araclar'),bakimlar=LS.get('bakimlar'),yakitlar=LS.get('yakitlar'),personel=LS.get('personel'),gelirGiderKayitlari=LS.get('gelirGider');
   const [analiz,setAnaliz]=useState(null),[yukleniyor,setYukleniyor]=useState(false),[tab,setTab]=useState('sohbet');
-  // ── Sohbet / Chat durumu ──
-  const [mesajlar,setMesajlar]=useState(()=>[{id:uid(),rol:'ai',metin:'Merhaba! Ben FiloPro AI Asistanınızım 🤖\nFilo verileriniz hakkında soru sorabilir ya da "50 litre mazot ekle" gibi komutlarla doğrudan sisteme veri girebilirsiniz. 🎤 Bas Konuş düğmesiyle sesli de konuşabilirsiniz.'}]);
+  // ── Sohbet / Chat durumu ── (localStorage'a kaydedilir, sayfa değiştirince kaybolmaz)
+  const AI_SOHBET_KEY='fp_ai_sohbet';
+  const varsayilanKarsilama={id:uid(),rol:'ai',metin:'Merhaba! Ben FiloPro AI Asistanınızım 🤖\nFilo verileriniz hakkında soru sorabilir ya da "50 litre mazot ekle" gibi komutlarla doğrudan sisteme veri girebilirsiniz. 🎤 Bas Konuş düğmesiyle sesli de konuşabilirsiniz.'};
+  const [mesajlar,setMesajlar]=useState(()=>{try{const k=JSON.parse(localStorage.getItem(AI_SOHBET_KEY));return(Array.isArray(k)&&k.length)?k:[varsayilanKarsilama];}catch{return[varsayilanKarsilama];}});
+  useEffect(()=>{try{localStorage.setItem(AI_SOHBET_KEY,JSON.stringify(mesajlar.slice(-60)));}catch{}},[mesajlar]);
+  const sohbetiTemizle=async()=>{if(!(await fpConfirm('Sohbet geçmişi temizlensin mi?')))return;setMesajlar([varsayilanKarsilama]);};
   const [girdi,setGirdi]=useState('');
   const [sohbetYukleniyor,setSohbetYukleniyor]=useState(false);
-  const [dinleniyor,setDinleniyor]=useState(false);
-  const [sesliYanit,setSesliYanit]=useState(false);
-  const [otoGonder,setOtoGonder]=useState(true);
+  const [sesliYanit,setSesliYanit]=useState(()=>aiSesAyarlariOku().sesliYanit);
+  const [otoGonder,setOtoGonder]=useState(()=>aiSesAyarlariOku().otoGonder);
   const [bekleyenEylem,setBekleyenEylem]=useState(null);
   const scrollRef=useRef(null);
-  const tanimaRef=useRef(null);
-  const sonSesMetniRef=useRef('');
 
   useEffect(()=>{if(scrollRef.current)scrollRef.current.scrollTop=scrollRef.current.scrollHeight;},[mesajlar,bekleyenEylem,sohbetYukleniyor]);
+
+  // Global "Bas Konuş" balonu başka bir sayfadan (veya bu sayfadan) tetiklenmişse, o komutu
+  // burada işler. Ayarlara göre ya doğrudan gönderilir ya da sadece metin kutusuna yazılır.
+  useEffect(()=>{
+    const bekleyenGonder=localStorage.getItem('fp_ai_pending_voice');
+    if(bekleyenGonder){localStorage.removeItem('fp_ai_pending_voice');setTab('sohbet');sohbetGonder(bekleyenGonder);}
+    const bekleyenTaslak=localStorage.getItem('fp_ai_pending_voice_draft');
+    if(bekleyenTaslak){localStorage.removeItem('fp_ai_pending_voice_draft');setTab('sohbet');setGirdi(bekleyenTaslak);}
+    const onGonder=(e)=>{localStorage.removeItem('fp_ai_pending_voice');setTab('sohbet');sohbetGonder(e.detail);};
+    const onTaslak=(e)=>{localStorage.removeItem('fp_ai_pending_voice_draft');setTab('sohbet');setGirdi(e.detail);};
+    window.addEventListener('fp-ai-voice-pending',onGonder);
+    window.addEventListener('fp-ai-voice-draft',onTaslak);
+    return()=>{window.removeEventListener('fp-ai-voice-pending',onGonder);window.removeEventListener('fp-ai-voice-draft',onTaslak);};
+    // eslint-disable-next-line
+  },[]);
 
   const yapayzeka=async(prompt)=>{
     setYukleniyor(true);setAnaliz(null);
@@ -3335,6 +3358,49 @@ function YapayZeka(){
   const arizaTahmini=()=>{const veri=araclar.map(a=>{const ab=bakimlar.filter(b=>b.aracId===a.id),ay=yakitlar.filter(y=>y.aracId===a.id);return{ad:a.ad,saat:a.saat,bakimSayisi:ab.length,sonBakim:ab.sort((x,y)=>y.tarih?.localeCompare(x.tarih))[0]?.tarih||'yok',topYakit:ay.reduce((s,y)=>s+y.miktar,0)};});yapayzeka(`Sen bir iş makinesi filo yönetim AI asistanısın. Aşağıdaki filo verilerini analiz et ve Türkçe olarak: 1) Arıza riski taşıyan araçlar, 2) Optimum bakım zamanları, 3) Yakıt anomalileri. Kısa ve net ol. Veri: ${JSON.stringify(veri)}`);};
   const maliyetProjektion=()=>{const ty=yakitlar.reduce((s,y)=>s+(+y.toplam||0),0),tb=bakimlar.filter(b=>b.durum==='tamamlandi').reduce((s,b)=>s+(+b.maliyet||0),0);yapayzeka(`Filo maliyet analisti olarak, bu verilere dayanarak Türkçe maliyet projeksiyonu yap. Yakıt gideri: ${ty}₺, bakım gideri: ${tb}₺, araç sayısı: ${araclar.length}. Yıllık projeksiyon ve tasarruf önerileri ver. Madde madde ve kısa ol.`);};
   const filoBuyutme=()=>{yapayzeka(`İş makinesi filo danışmanı olarak, ${araclar.length} araçlık filoya bakarak Türkçe değerlendirme yap. Araç tipleri: ${araclar.map(a=>a.tip).join(', ')}. Filo optimizasyonu ve öneriler. Kısa ve pratik ol.`);};
+  const haftalikOzet=()=>{
+    const buAy=today().slice(0,7);
+    const gelirGider=LS.get('gelirGider'),isemirleri=LS.get('isemirleri'),gorevler=LS.get('gorevler'),cariler=LS.get('cariler'),hareketler=LS.get('kasaHareketleri'),faturalar=LS.get('faturalar');
+    const gelir=gelirGider.filter(g=>g.tur==='gelir'&&g.tarih?.startsWith(buAy)).reduce((s,g)=>s+(+g.tutar||0),0);
+    const gider=gelirGider.filter(g=>g.tur==='gider'&&g.tarih?.startsWith(buAy)).reduce((s,g)=>s+(+g.tutar||0),0);
+    let acikAlacak=0;cariler.forEach(c=>{if((c.tipler||[]).includes('musteri'))acikAlacak+=Math.max(0,musteriBakiye(c.id,faturalar,hareketler).bakiye);});
+    const veri={
+      buAyNet:gelir-gider,buAyGelir:gelir,buAyGider:gider,acikAlacak,
+      aktifArac:araclar.filter(a=>a.durum==='aktif').length,bakimdaArac:araclar.filter(a=>a.durum==='bakimda').length,
+      acikIsEmri:isemirleri.filter(i=>i.durum!=='tamamlandi').length,acikGorev:gorevler.filter(g=>g.durum!=='tamamlandi').length,
+      sistemUyarilari:getSistemUyarilari().slice(0,8).map(u=>u.baslik),
+    };
+    yapayzeka(`Sen bir filo yönetimi şirketinin danışmanısın. Aşağıdaki güncel verilere dayanarak, şirket sahibine sunulacak 5-6 cümlelik Türkçe bir "haftalık yönetici özeti" yaz. En önemli 3 konuya (finansal durum, filo durumu, dikkat gerektiren uyarılar) odaklan; sayıları tekrar sıralamak yerine yorumla ve varsa somut bir öneri ver. Veri: ${JSON.stringify(veri)}`);
+  };
+  const anomaliTespiti=()=>{
+    // Her aracın kendi ortalama yakıt/bakım maliyetine göre normalden sapan (aykırı) kayıtları bulur.
+    const anomaliler=[];
+    araclar.forEach(a=>{
+      const ay=yakitlar.filter(y=>y.aracId===a.id);
+      if(ay.length>=3){
+        const ort=ay.reduce((s,y)=>s+(+y.toplam||0),0)/ay.length;
+        ay.forEach(y=>{if((+y.toplam||0)>ort*1.8)anomaliler.push({tip:'yakit',arac:a.ad,tarih:y.tarih,tutar:y.toplam,aracOrtalamasi:Math.round(ort)});});
+      }
+      const ab=bakimlar.filter(b=>b.aracId===a.id&&b.durum==='tamamlandi');
+      if(ab.length>=2){
+        const ort=ab.reduce((s,b)=>s+(+b.maliyet||0),0)/ab.length;
+        ab.forEach(b=>{if((+b.maliyet||0)>ort*2&&(+b.maliyet||0)>500)anomaliler.push({tip:'bakim',arac:a.ad,tarih:b.tarih,tutar:b.maliyet,aracOrtalamasi:Math.round(ort)});});
+      }
+    });
+    if(!anomaliler.length){setAnaliz('✅ Son verilerde belirgin bir maliyet anomalisi tespit edilmedi (her araç kendi geçmiş ortalamasına göre normal seyrediyor).');return;}
+    yapayzeka(`Sen bir filo maliyet denetçisisin. Aşağıda, her aracın KENDİ geçmiş ortalamasına göre normalden belirgin şekilde yüksek çıkan yakıt/bakım kayıtları listeleniyor (istatistiksel olarak zaten aykırı olarak filtrelendi). Bunları Türkçe olarak yorumla: hangi kayıtlar en çok dikkat gerektiriyor, olası nedenler neler olabilir (hatalı veri girişi, yakıt hırsızlığı, beklenmedik arıza vb.), ve şirket sahibine ne kontrol etmesini önerirsin. Kısa ve somut ol. Veri: ${JSON.stringify(anomaliler)}`);
+  };
+  const cariRiskAnalizi=()=>{
+    const cariler=LS.get('cariler'),faturalar=LS.get('faturalar'),hareketler=LS.get('kasaHareketleri');
+    const riskliler=cariler.filter(c=>(c.tipler||[]).includes('musteri')).map(c=>{
+      const bk=musteriBakiye(c.id,faturalar,hareketler);
+      const vadesiGecenFaturalar=faturalar.filter(f=>f.tur==='kesilen'&&f.musteriId===c.id&&faturaKalan(f,hareketler)>0&&daysLeft(f.vadeTarih)<0);
+      const enEskiGecikme=vadesiGecenFaturalar.length?Math.max(...vadesiGecenFaturalar.map(f=>-daysLeft(f.vadeTarih))):0;
+      return{ad:c.ad,acikBakiye:bk.bakiye,vadesiGecenFaturaSayisi:vadesiGecenFaturalar.length,enUzunGecikmeGun:enEskiGecikme};
+    }).filter(c=>c.acikBakiye>0).sort((a,b)=>b.acikBakiye-a.acikBakiye).slice(0,10);
+    if(!riskliler.length){setAnaliz('✅ Şu an açık alacağı olan müşteri bulunmuyor.');return;}
+    yapayzeka(`Sen bir alacak tahsilat danışmanısın. Aşağıda en yüksek açık bakiyeye sahip 10 müşteri, açık tutarları ve vadesi geçen fatura bilgileriyle listeleniyor. Türkçe olarak: hangi müşterilerin tahsilat açısından öncelikli/riskli olduğunu yorumla, somut bir aksiyon sırası öner (kimi önce aramalı, kimde dikkatli olunmalı). Sayıları tekrarlamak yerine yorumla. Kısa ve pratik ol. Veri: ${JSON.stringify(riskliler)}`);
+  };
 
   // ── Sohbet AI: veri özeti çıkar (bağlam olarak API'ye gönderilecek) ──
   const veriOzetiCikar=()=>{
@@ -3383,8 +3449,8 @@ Mevcut sistem verisi özeti (JSON): ${JSON.stringify(veriOzetiCikar())}
 
 KURALLAR:
 - SADECE geçerli bir JSON nesnesi döndür. Markdown, kod bloğu işareti, açıklama veya başka hiçbir metin ekleme.
-- Şema: {"yanit":"kullanıcıya gösterilecek kısa profesyonel Türkçe cevap","eylem":null veya {"tip":"veri_ekle","hedef":"yakit"|"bakim"|"arac"|"personel"|"izin"|"mesai"|"gelirGider","aracAdi":"metinde geçen araç adı/plakası (varsa)","personelAdi":"metinde geçen personel adı (varsa)","veri":{...}}}
-- Kullanıcı veri girişi istiyorsa (yakıt ikmali, bakım kaydı, yeni araç, yeni personel, izin talebi, mesai kaydı, gelir/gider kaydı) uygun "hedef"i seç ve "veri" alanlarını doldur:
+- Şema: {"yanit":"kullanıcıya gösterilecek kısa profesyonel Türkçe cevap","eylem":null veya {"tip":"veri_ekle","hedef":"yakit"|"bakim"|"arac"|"personel"|"izin"|"mesai"|"gelirGider"|"gorev"|"cari","aracAdi":"metinde geçen araç adı/plakası (varsa)","personelAdi":"metinde geçen personel adı (varsa)","veri":{...}}}
+- Kullanıcı veri girişi istiyorsa (yakıt ikmali, bakım kaydı, yeni araç, yeni personel, izin talebi, mesai kaydı, gelir/gider kaydı, görev, yeni cari) uygun "hedef"i seç ve "veri" alanlarını doldur:
   yakit -> {miktar, fiyat, tarih, depo}
   bakim -> {tip, tarih, maliyet, notlar}
   arac -> {ad, plaka, tip, yil, saat}
@@ -3392,6 +3458,8 @@ KURALLAR:
   izin -> {tur:"yillik"|"mazeret"|"hastalik"|"ucretsiz", baslangic, bitis, aciklama}
   mesai -> {tarih, girisSaat, cikisSaat, notlar}
   gelirGider -> {tur:"gelir"|"gider", kategori, aciklama, tutar, kdv, tarih}
+  gorev -> {baslik, oncelik:"kritik"|"normal"|"dusuk", bitis}
+  cari -> {ad, caritip:"musteri"|"tedarikci"|"ikisi", yetkili, tel}
 - Araç ile ilgili kayıtlarda "veri" içine aracId YAZMA, bunun yerine üstteki "aracAdi" alanına kullanıcının söylediği araç adını/plakasını yaz.
 - İzin/mesai kayıtlarında "veri" içine personelId YAZMA, bunun yerine üstteki "personelAdi" alanına kullanıcının söylediği personel adını yaz.
 - Tarih belirtilmemişse boş bırak (bugünün tarihi otomatik atanacaktır).
@@ -3435,7 +3503,8 @@ ${gecmis}
     const {hedef,veri}=bekleyenEylem;
     if(['yakit','bakim'].includes(hedef)&&!veri.aracId){fpToast('Lütfen bir araç seçin.');return;}
     if(['izin','mesai'].includes(hedef)&&!veri.personelId){fpToast('Lütfen bir personel seçin.');return;}
-    if((hedef==='arac'||hedef==='personel')&&!veri.ad?.trim()){fpToast('Lütfen ad alanını doldurun.');return;}
+    if((hedef==='arac'||hedef==='personel'||hedef==='cari')&&!veri.ad?.trim()){fpToast('Lütfen ad alanını doldurun.');return;}
+    if(hedef==='gorev'&&!veri.baslik?.trim()){fpToast('Lütfen görev başlığını doldurun.');return;}
     if(hedef==='gelirGider'&&!(+veri.tutar>0)){fpToast("Tutar 0'dan büyük olmalıdır.");return;}
     let ozetMetin='';
     if(hedef==='yakit'){
@@ -3471,6 +3540,15 @@ ${gecmis}
       const kayit={...veri,id:uid(),tur:veri.tur||'gider',tarih:veri.tarih||today(),belgeNo:`${veri.tur==='gelir'?'GEL':'GID'}-${uid().slice(0,6)}`};
       LS.set('gelirGider',[...LS.get('gelirGider'),kayit]);
       ozetMetin=`${veri.tur==='gelir'?'Gelir':'Gider'}: ${veri.aciklama||veri.kategori||''} (${fmtTL(veri.tutar)})`;
+    }else if(hedef==='gorev'){
+      const kayit={...veri,id:uid(),durum:'acik',oncelik:veri.oncelik||'normal'};
+      LS.set('gorevler',[...LS.get('gorevler'),kayit]);
+      ozetMetin=`Görev: ${veri.baslik}`;
+    }else if(hedef==='cari'){
+      const tipler=veri.caritip==='tedarikci'?['tedarikci']:veri.caritip==='ikisi'?['musteri','tedarikci']:['musteri'];
+      const kayit={ad:veri.ad,yetkili:veri.yetkili||'',tel:veri.tel||'',email:'',adres:'',vergiNo:'',vergiDaire:'',notlar:'',tipler,id:uid()};
+      LS.set('cariler',[...LS.get('cariler'),kayit]);
+      ozetMetin=`Yeni cari: ${veri.ad}`;
     }
     const loglar=LS.get('islemLoglari');
     LS.set('islemLoglari',[{id:uid(),kullanici:'AI Asistan',islem:`${AI_HEDEF_BILGI[hedef].ad} eklendi`,detay:ozetMetin,tarih:new Date().toLocaleString('tr-TR')},...loglar]);
@@ -3478,31 +3556,20 @@ ${gecmis}
     setBekleyenEylem(null);
   };
 
-  // ── Sesli komut (Bas Konuş) ──
-  const baslatDinleme=()=>{
-    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(!SR){fpToast('Tarayıcınız sesli komutu desteklemiyor. Chrome veya Edge kullanmanızı öneririz.');return;}
-    const tanima=new SR();
-    tanima.lang='tr-TR';tanima.interimResults=true;tanima.continuous=false;tanima.maxAlternatives=1;
-    tanima.onstart=()=>{setDinleniyor(true);sonSesMetniRef.current='';};
-    tanima.onresult=(e)=>{let metin='';for(let i=0;i<e.results.length;i++){metin+=e.results[i][0].transcript;}sonSesMetniRef.current=metin;setGirdi(metin);};
-    tanima.onerror=()=>setDinleniyor(false);
-    tanima.onend=()=>{setDinleniyor(false);if(otoGonder&&sonSesMetniRef.current.trim()){const m=sonSesMetniRef.current;sonSesMetniRef.current='';sohbetGonder(m);}};
-    tanimaRef.current=tanima;
-    try{tanima.start();}catch{}
-  };
-  const durdurDinleme=()=>{try{tanimaRef.current?.stop();}catch{}setDinleniyor(false);};
+  // Not: Sesli komut (Bas Konuş) artık global bir balon üzerinden (tüm sayfalarda erişilebilir)
+  // yönetiliyor; bkz. GlobalBasKonus bileşeni. Bu sayfa sadece sonucu yukarıdaki useEffect ile dinler.
 
   return(<div>
     <div style={{...S.card,borderTop:`3px solid ${C.purple}`,marginBottom:20}}><div style={{display:'flex',alignItems:'center',gap:12}}><div style={{fontSize:32}}>🤖</div><div><div style={{fontSize:15,fontWeight:700,color:C.white}}>FiloPro AI Asistan</div><div style={{fontSize:12,color:C.muted,marginTop:2}}>Sohbet edin, sesli komut verin, veri girin ve filo verilerinizi analiz ettirin — hepsi tek modülde.</div></div><span style={{...S.badge(C.purple),marginLeft:'auto'}}>PROFESYONEL</span></div></div>
-    <TabBar tabs={[['sohbet','💬 AI Asistan'],['ariza','🔮 Arıza Tahmini'],['maliyet','💹 Maliyet Proj.'],['filo','📊 Filo Analizi']]} active={tab} onChange={setTab}/>
+    <TabBar tabs={[['sohbet','💬 AI Asistan'],['ozet','📋 Yönetici Özeti'],['ariza','🔮 Arıza Tahmini'],['maliyet','💹 Maliyet Proj.'],['filo','📊 Filo Analizi'],['anomali','🕵️ Anomali Tespiti'],['risk','⚠️ Cari Risk Analizi']]} active={tab} onChange={setTab}/>
 
     {tab==='sohbet'&&(<div style={S.card}>
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12,flexWrap:'wrap',gap:8}}>
         <div style={S.secTitle}>💬 AI Asistan — Sohbet & Sesli Veri Girişi</div>
         <div style={{display:'flex',gap:14,fontSize:12,color:C.muted,alignItems:'center',flexWrap:'wrap'}}>
-          <label style={{display:'flex',alignItems:'center',gap:5,cursor:'pointer'}}><input type="checkbox" checked={sesliYanit} onChange={e=>setSesliYanit(e.target.checked)}/> 🔊 Sesli yanıt oku</label>
-          <label style={{display:'flex',alignItems:'center',gap:5,cursor:'pointer'}}><input type="checkbox" checked={otoGonder} onChange={e=>setOtoGonder(e.target.checked)}/> 🎤 Konuşma bitince otomatik gönder</label>
+          <label style={{display:'flex',alignItems:'center',gap:5,cursor:'pointer'}}><input type="checkbox" checked={sesliYanit} onChange={e=>{setSesliYanit(e.target.checked);aiSesAyarlariYaz({sesliYanit:e.target.checked});}}/> 🔊 Sesli yanıt oku</label>
+          <label style={{display:'flex',alignItems:'center',gap:5,cursor:'pointer'}}><input type="checkbox" checked={otoGonder} onChange={e=>{setOtoGonder(e.target.checked);aiSesAyarlariYaz({otoGonder:e.target.checked});}}/> 🎤 Konuşma bitince otomatik gönder</label>
+          <button style={{...S.btnO,fontSize:11,padding:'4px 10px'}} onClick={sohbetiTemizle}>🗑 Sohbeti Temizle</button>
         </div>
       </div>
       <div ref={scrollRef} style={{maxHeight:400,overflowY:'auto',display:'flex',flexDirection:'column',gap:10,padding:'4px 2px',marginBottom:12,background:C.input,borderRadius:10,border:`1px solid ${C.border}`}}>
@@ -3521,6 +3588,8 @@ ${gecmis}
             :tipi==='tur'?(<select style={S.sel} value={bekleyenEylem.veri.tur||'gider'} onChange={e=>eylemAlanGuncelle('tur',e.target.value)}><option value="gelir">Gelir</option><option value="gider">Gider</option></select>)
             :tipi==='personelSel'?(<select style={S.sel} value={bekleyenEylem.veri.personelId||''} onChange={e=>eylemAlanGuncelle('personelId',+e.target.value)}><option value="">— Personel Seçiniz —</option>{personel.map(p=><option key={p.id} value={p.id}>{p.ad}</option>)}</select>)
             :tipi==='izintur'?(<select style={S.sel} value={bekleyenEylem.veri.tur||'yillik'} onChange={e=>eylemAlanGuncelle('tur',e.target.value)}>{Object.entries(IZIN_TUR_LABEL).map(([k,l])=><option key={k} value={k}>{l}</option>)}</select>)
+            :tipi==='oncelik'?(<select style={S.sel} value={bekleyenEylem.veri.oncelik||'normal'} onChange={e=>eylemAlanGuncelle('oncelik',e.target.value)}><option value="kritik">🔴 Kritik</option><option value="normal">🔵 Normal</option><option value="dusuk">⚪ Düşük</option></select>)
+            :tipi==='caritip'?(<select style={S.sel} value={bekleyenEylem.veri.caritip||'musteri'} onChange={e=>eylemAlanGuncelle('caritip',e.target.value)}><option value="musteri">🧾 Müşteri</option><option value="tedarikci">🏭 Tedarikçi</option><option value="ikisi">Her İkisi</option></select>)
             :tipi==='time'?(<input type="time" style={S.inp} value={bekleyenEylem.veri[k]||''} onChange={e=>eylemAlanGuncelle(k,e.target.value)}/>)
             :tipi==='date'?(<input type="date" style={S.inp} value={bekleyenEylem.veri[k]||''} onChange={e=>eylemAlanGuncelle(k,e.target.value)}/>)
             :tipi==='number'?(<input type="number" style={S.inp} value={bekleyenEylem.veri[k]??''} onChange={e=>eylemAlanGuncelle(k,+e.target.value)}/>)
@@ -3539,25 +3608,16 @@ ${gecmis}
         <input style={{...S.inp,flex:1}} placeholder="Mesaj yazın veya 🎤 ile konuşun…" value={girdi} onChange={e=>setGirdi(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')sohbetGonder();}}/>
         <button style={S.btn()} onClick={()=>sohbetGonder()} disabled={sohbetYukleniyor||!girdi.trim()}>Gönder</button>
       </div>
-      <div style={{fontSize:11,color:C.muted,marginTop:8}}>🎤 <strong>Bas Konuş:</strong> sağ alttaki mikrofon balonuna basın. Chrome/Edge tarayıcılarında çalışır. Konuşmanız metne çevrilir; veri girişi komutlarında kayıt sisteme işlenmeden önce onayınıza sunulur.</div>
-      <button
-        style={{
-          position:'fixed',right:24,bottom:24,zIndex:60,
-          width:60,height:60,borderRadius:'50%',border:'none',
-          background:dinleniyor?C.red:C.accent,color:'#fff',fontSize:26,
-          display:'flex',alignItems:'center',justifyContent:'center',
-          boxShadow:'0 4px 16px rgba(0,0,0,.35)',cursor:'pointer',
-          animation:dinleniyor?'fpPulse 1.2s ease-in-out infinite':'none',
-        }}
-        onClick={()=>dinleniyor?durdurDinleme():baslatDinleme()}
-        title="Bas Konuş — sesli komut"
-      >{dinleniyor?'🔴':'🎤'}</button>
+      <div style={{fontSize:11,color:C.muted,marginTop:8}}>🎤 <strong>Bas Konuş:</strong> ekranın sağ altındaki mikrofon balonuna basın (tüm sayfalardan erişilebilir). Chrome/Edge tarayıcılarında çalışır. Konuşmanız metne çevrilir; veri girişi komutlarında kayıt sisteme işlenmeden önce onayınıza sunulur.</div>
     </div>)}
 
+    {tab==='ozet'&&(<div style={S.card}><div style={S.secTitle}>📋 Haftalık Yönetici Özeti</div><div style={{fontSize:13,color:C.muted,marginBottom:16}}>Finansal durum, filo durumu ve aktif uyarılar tek bir yönetici özetinde birleştirilir.</div><button style={S.btn(C.purple)} onClick={haftalikOzet} disabled={yukleniyor}>{yukleniyor?'⏳ Hazırlanıyor...':'📋 Özet Oluştur'}</button>{analiz&&<div style={{marginTop:16,background:C.input,borderRadius:10,padding:16,fontSize:13,color:C.text,lineHeight:1.7,whiteSpace:'pre-wrap',borderLeft:`3px solid ${C.purple}`}}>{analiz}</div>}</div>)}
     {tab==='ariza'&&(<div style={S.card}><div style={S.secTitle}>🔮 Arıza Öngörüsü & Bakım Zamanı</div><div style={{fontSize:13,color:C.muted,marginBottom:16}}>Bakım geçmişi, çalışma saatleri ve yakıt tüketim verileri analiz edilir.</div><button style={S.btn(C.purple)} onClick={arizaTahmini} disabled={yukleniyor}>{yukleniyor?'⏳ Analiz yapılıyor...':'🔮 Arıza Tahmini Yap'}</button>{analiz&&<div style={{marginTop:16,background:C.input,borderRadius:10,padding:16,fontSize:13,color:C.text,lineHeight:1.7,whiteSpace:'pre-wrap',borderLeft:`3px solid ${C.purple}`}}>{analiz}</div>}</div>)}
     {tab==='maliyet'&&(<div style={S.card}><div style={S.secTitle}>💹 Maliyet Projeksiyonu</div><div style={{fontSize:13,color:C.muted,marginBottom:16}}>Geçmiş gider verileri üzerinden gelecek dönem maliyet projeksiyonu üretilir.</div><button style={S.btn(C.purple)} onClick={maliyetProjektion} disabled={yukleniyor}>{yukleniyor?'⏳ Hesaplanıyor...':'💹 Projeksiyon Üret'}</button>{analiz&&<div style={{marginTop:16,background:C.input,borderRadius:10,padding:16,fontSize:13,color:C.text,lineHeight:1.7,whiteSpace:'pre-wrap',borderLeft:`3px solid ${C.purple}`}}>{analiz}</div>}</div>)}
     {tab==='filo'&&(<div style={S.card}><div style={S.secTitle}>📊 Filo Büyütme / Küçültme Analizi</div><div style={{fontSize:13,color:C.muted,marginBottom:16}}>Mevcut filo kompozisyonu analiz edilerek optimizasyon önerileri sunulur.</div><button style={S.btn(C.purple)} onClick={filoBuyutme} disabled={yukleniyor}>{yukleniyor?'⏳ Analiz ediliyor...':'📊 Filo Analizi Yap'}</button>{analiz&&<div style={{marginTop:16,background:C.input,borderRadius:10,padding:16,fontSize:13,color:C.text,lineHeight:1.7,whiteSpace:'pre-wrap',borderLeft:`3px solid ${C.purple}`}}>{analiz}</div>}</div>)}
-    <div style={{...S.card,marginTop:16,background:`${C.purple}08`,borderColor:`${C.purple}33`}}><div style={{fontSize:13,color:C.muted}}><strong style={{color:C.purple}}>ℹ️ Not</strong> — Bu modül Claude API'ye bağlanır. Bağımsız dağıtımda CORS ve API anahtarı kısıtları nedeniyle bir backend proxy gerekir.</div></div>
+    {tab==='anomali'&&(<div style={S.card}><div style={S.secTitle}>🕵️ Anomali Tespiti</div><div style={{fontSize:13,color:C.muted,marginBottom:16}}>Her aracın kendi geçmiş ortalamasına göre normalden belirgin şekilde sapan yakıt/bakım kayıtları bulunur ve yorumlanır.</div><button style={S.btn(C.purple)} onClick={anomaliTespiti} disabled={yukleniyor}>{yukleniyor?'⏳ Taranıyor...':'🕵️ Anomalileri Tara'}</button>{analiz&&<div style={{marginTop:16,background:C.input,borderRadius:10,padding:16,fontSize:13,color:C.text,lineHeight:1.7,whiteSpace:'pre-wrap',borderLeft:`3px solid ${C.purple}`}}>{analiz}</div>}</div>)}
+    {tab==='risk'&&(<div style={S.card}><div style={S.secTitle}>⚠️ Cari Risk Analizi</div><div style={{fontSize:13,color:C.muted,marginBottom:16}}>En yüksek açık alacağa sahip müşteriler, vadesi geçen fatura durumlarıyla birlikte tahsilat önceliğine göre değerlendirilir.</div><button style={S.btn(C.purple)} onClick={cariRiskAnalizi} disabled={yukleniyor}>{yukleniyor?'⏳ Analiz ediliyor...':'⚠️ Risk Analizi Yap'}</button>{analiz&&<div style={{marginTop:16,background:C.input,borderRadius:10,padding:16,fontSize:13,color:C.text,lineHeight:1.7,whiteSpace:'pre-wrap',borderLeft:`3px solid ${C.purple}`}}>{analiz}</div>}</div>)}
+    <div style={{...S.card,marginTop:16,background:`${C.purple}08`,borderColor:`${C.purple}33`}}><div style={{fontSize:13,color:C.muted}}><strong style={{color:C.purple}}>ℹ️ Not</strong> — Bu modül, sunucu üzerinden Groq API'ye (ücretsiz, console.groq.com) bağlanır. Ayarlar → Senkronizasyon → Yapay Zeka bölümünden bir API anahtarı girmeniz gerekir.</div></div>
   </div>);
 }
 
@@ -6214,6 +6274,65 @@ const aktifKullaniciSaltOkunurMu=()=>{
 };
 
 // ── App ───────────────────────────────────────────────────────────────────────
+// ── Global "Bas Konuş" Balonu ────────────────────────────────────────────────
+// Tüm sayfalarda sağ altta sabit durur; sesli komutu Yapay Zeka Asistan sayfasına
+// (mevcutsa canlı olay ile, değilse localStorage kuyruğu + sayfa yönlendirmesiyle) iletir.
+function GlobalBasKonus(){
+  const [dinleniyor,setDinleniyor]=useState(false);
+  const [destekli,setDestekli]=useState(true);
+  const tanimaRef=useRef(null);
+  const sonSesMetniRef=useRef('');
+
+  useEffect(()=>{
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+    setDestekli(!!SR);
+  },[]);
+
+  const baslat=()=>{
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(!SR){fpToast('Tarayıcınız sesli komutu desteklemiyor. Chrome veya Edge kullanmanızı öneririz.');return;}
+    const tanima=new SR();
+    tanima.lang='tr-TR';tanima.interimResults=true;tanima.continuous=false;tanima.maxAlternatives=1;
+    tanima.onstart=()=>{setDinleniyor(true);sonSesMetniRef.current='';};
+    tanima.onresult=(e)=>{let metin='';for(let i=0;i<e.results.length;i++){metin+=e.results[i][0].transcript;}sonSesMetniRef.current=metin;};
+    tanima.onerror=()=>setDinleniyor(false);
+    tanima.onend=()=>{
+      setDinleniyor(false);
+      const metin=sonSesMetniRef.current.trim();
+      sonSesMetniRef.current='';
+      if(!metin)return;
+      const {otoGonder}=aiSesAyarlariOku();
+      if(otoGonder){
+        localStorage.setItem('fp_ai_pending_voice',metin);
+        window.dispatchEvent(new CustomEvent('fp-ai-voice-pending',{detail:metin}));
+      }else{
+        localStorage.setItem('fp_ai_pending_voice_draft',metin);
+        window.dispatchEvent(new CustomEvent('fp-ai-voice-draft',{detail:metin}));
+      }
+      fpNav('ai');
+    };
+    tanimaRef.current=tanima;
+    try{tanima.start();}catch{}
+  };
+  const durdur=()=>{try{tanimaRef.current?.stop();}catch{}setDinleniyor(false);};
+
+  if(!destekli)return null;
+  return(
+    <button
+      style={{
+        position:'fixed',right:24,bottom:24,zIndex:900,
+        width:60,height:60,borderRadius:'50%',border:'none',
+        background:dinleniyor?C.red:C.accent,color:'#fff',fontSize:26,
+        display:'flex',alignItems:'center',justifyContent:'center',
+        boxShadow:'0 4px 16px rgba(0,0,0,.35)',cursor:'pointer',
+        animation:dinleniyor?'fpPulse 1.2s ease-in-out infinite':'none',
+      }}
+      onClick={()=>dinleniyor?durdur():baslat()}
+      title="Bas Konuş — sesli komut (her sayfadan)"
+    >{dinleniyor?'🔴':'🎤'}</button>
+  );
+}
+
 function App(){
   useEffect(()=>{seed();migratePersonelModulu();migrateCariBirlestir();ensureSettings();migrateSahaServisTipleriEkle();tekrarlananFaturalariUret();},[]);
   const [active,setActive]=useState(()=>{const h=window.location.hash.replace('#','');if(ESKI_SAYFA_YONLENDIRME[h])return ESKI_SAYFA_YONLENDIRME[h];if(ALL_PAGES.some(p=>p.id===h))return h;return getSettings().baslangicSayfasi||'dashboard';});
@@ -6349,6 +6468,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     <ErrorBoundary><App/></ErrorBoundary>
     <ToastHost/>
     <ConfirmHost/>
+    <GlobalBasKonus/>
   </>
 );
 
