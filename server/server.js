@@ -19,6 +19,7 @@ const path = require('path');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 const cron = require('node-cron');
+const webpush = require('web-push');
 
 const app = express();
 app.use(cors());
@@ -27,6 +28,18 @@ app.use(express.json({ limit: '20mb' }));
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET;
 const GROQ_API_KEY = process.env.GROQ_API_KEY; // opsiyonel: yoksa sadece AI modülü çalışmaz, senkron etkilenmez. Ücretsiz anahtar: console.groq.com
+
+// ── Tarayıcı Push Bildirimleri — opsiyonel: yoksa sadece bu özellik devre dışı kalır ──
+// VAPID anahtar çifti üretmek için: npx web-push generate-vapid-keys
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:destek@filopro.local';
+const pushAktif = !!(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY);
+if (pushAktif) {
+  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+} else {
+  console.warn('UYARI: VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY tanımlı değil. Tarayıcı push bildirimleri devre dışı (senkron ve diğer özellikler etkilenmez).');
+}
 
 // ── E-posta (SMTP) — opsiyonel: yoksa sadece günlük otomatik yedek e-postası devre dışı kalır ──
 const SMTP_USER = process.env.SMTP_USER;
@@ -96,6 +109,15 @@ function readBackupConfig(tenantId) {
 }
 function writeBackupConfig(tenantId, cfg) {
   writeJsonAtomic(backupConfigFile(tenantId), cfg);
+}
+function pushSubsFile(tenantId) {
+  return path.join(TENANTS_DIR, `${tenantId}.push.json`);
+}
+function readPushSubs(tenantId) {
+  return readJson(pushSubsFile(tenantId), []); // [{username, endpoint, subscription, addedAt}]
+}
+function writePushSubs(tenantId, subs) {
+  writeJsonAtomic(pushSubsFile(tenantId), subs);
 }
 function readUsers() {
   return readJson(USERS_FILE, { users: [] }).users;
@@ -441,15 +463,20 @@ async function runDailyBackups(kaynak) {
 // bu iç zamanlayıcı yeterlidir. Render'ın ÜCRETSİZ planında servis uykuya
 // geçebileceğinden bu tek başına güvenilir DEĞİLDİR; aşağıdaki dış tetikleyici
 // uç noktasını (README'deki cron-job.org talimatına göre) mutlaka kurun.
-if (mailer) {
-  cron.schedule('0 0 * * *', () => runDailyBackups('iç zamanlayıcı'), { timezone: 'Europe/Istanbul' });
-  console.log('Günlük otomatik yedek e-postası iç zamanlayıcısı aktif (her gece 00:00, Europe/Istanbul).');
+if (mailer || pushAktif) {
+  cron.schedule('0 0 * * *', async () => {
+    if (mailer) await runDailyBackups('iç zamanlayıcı');
+    if (pushAktif) await runDailyPushDigest();
+  }, { timezone: 'Europe/Istanbul' });
+  console.log('Günlük otomatik zamanlayıcı aktif (her gece 00:00, Europe/Istanbul).');
 }
 
 // Dış bir zamanlayıcı servisinin (ör. cron-job.org, ücretsiz) her gece çağırması
 // için uç nokta. Render'ın ücretsiz planında güvenilir tetikleme YALNIZCA bu
 // yoldan sağlanır: dış istek, uyuyan servisi otomatik uyandırır. BACKUP_CRON_SECRET
-// ile korunur; bilmeyen biri rastgele tetikleyip e-posta gönderemesin diye.
+// ile korunur; bilmeyen biri rastgele tetikleyip e-posta/bildirim gönderemesin diye.
+// Yedek e-postası VEYA push bildirimi — hangisi yapılandırılmışsa o çalışır, ikisi
+// birbirine bağımlı değildir.
 const BACKUP_CRON_SECRET = process.env.BACKUP_CRON_SECRET;
 app.get('/api/backup/run-daily', async (req, res) => {
   if (!BACKUP_CRON_SECRET) {
@@ -458,16 +485,125 @@ app.get('/api/backup/run-daily', async (req, res) => {
   if (req.query.secret !== BACKUP_CRON_SECRET) {
     return res.status(401).json({ error: 'Geçersiz secret.' });
   }
-  if (!mailer) {
-    return res.status(503).json({ error: 'SMTP yapılandırılmamış.' });
+  if (!mailer && !pushAktif) {
+    return res.status(503).json({ error: 'Ne SMTP ne de push bildirimleri yapılandırılmış; çalıştırılacak bir şey yok.' });
   }
   try {
-    const sonuc = await runDailyBackups('dış tetikleyici');
+    const yedekSonuc = mailer ? await runDailyBackups('dış tetikleyici') : { gonderildi: 0, atlandi: 0 };
+    const pushSonuc = pushAktif ? await runDailyPushDigest() : { gonderildi: 0 };
+    res.json({ ok: true, yedekEpostaGonderildi: yedekSonuc.gonderildi, yedekAtlandi: yedekSonuc.atlandi, pushGonderildi: pushSonuc.gonderildi });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Tarayıcı Push Bildirimleri ───────────────────────────────────────────────
+// VAPID genel anahtarını döner (giriş gerektirmez, tarayıcı abonelik oluştururken buna ihtiyaç duyar).
+app.get('/api/push/vapid-public-key', (req, res) => {
+  if (!pushAktif) return res.status(503).json({ error: 'Push bildirimleri sunucuda yapılandırılmamış.' });
+  res.json({ publicKey: VAPID_PUBLIC_KEY });
+});
+
+// Bu cihazı/tarayıcıyı bildirim almak üzere kaydeder.
+app.post('/api/push/subscribe', authMiddleware, (req, res) => {
+  if (!pushAktif) return res.status(503).json({ error: 'Push bildirimleri sunucuda yapılandırılmamış.' });
+  const { subscription } = req.body || {};
+  if (!subscription || !subscription.endpoint) return res.status(400).json({ error: 'Geçersiz abonelik.' });
+  const subs = readPushSubs(req.user.tenantId);
+  const filtreli = subs.filter((s) => s.endpoint !== subscription.endpoint);
+  filtreli.push({ username: req.user.sub, endpoint: subscription.endpoint, subscription, addedAt: Date.now() });
+  writePushSubs(req.user.tenantId, filtreli);
+  res.json({ ok: true });
+});
+
+// Bu cihazın aboneliğini kaldırır.
+app.post('/api/push/unsubscribe', authMiddleware, (req, res) => {
+  const { endpoint } = req.body || {};
+  const subs = readPushSubs(req.user.tenantId);
+  writePushSubs(req.user.tenantId, subs.filter((s) => s.endpoint !== endpoint));
+  res.json({ ok: true });
+});
+
+// Bir şirketteki tüm kayıtlı cihazlara push gönderir; geçersiz/süresi dolmuş abonelikleri temizler.
+async function sendPushToTenant(tenantId, payload) {
+  if (!pushAktif) return { gonderildi: 0 };
+  const subs = readPushSubs(tenantId);
+  if (!subs.length) return { gonderildi: 0 };
+  let gonderildi = 0;
+  const kalanlar = [];
+  for (const s of subs) {
+    try {
+      await webpush.sendNotification(s.subscription, JSON.stringify(payload));
+      gonderildi++;
+      kalanlar.push(s);
+    } catch (e) {
+      if (e.statusCode !== 410 && e.statusCode !== 404) kalanlar.push(s); // 410/404 = abonelik artık geçersiz, listeden düş
+    }
+  }
+  if (kalanlar.length !== subs.length) writePushSubs(tenantId, kalanlar);
+  return { gonderildi };
+}
+
+// Hemen bir test bildirimi gönderir (bu kullanıcının şirketindeki tüm kayıtlı cihazlara).
+app.post('/api/push/test', authMiddleware, async (req, res) => {
+  if (!pushAktif) return res.status(503).json({ error: 'Push bildirimleri sunucuda yapılandırılmamış.' });
+  try {
+    const sonuc = await sendPushToTenant(req.user.tenantId, { title: 'FiloPro Test Bildirimi', body: 'Push bildirimleri çalışıyor ✅', url: './' });
     res.json({ ok: true, ...sonuc });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
+
+// Bir şirketin verisinden basit uyarı kontrolleri yapar (sigorta/muayene yaklaşan, fatura vadesi
+// geçmiş, kritik stok, bütçe aşımı). İstemcideki tam "Sistem Uyarıları" mantığının BİREBİR aynısı
+// değildir — en önemli/aksiyon gerektiren dört türle sınırlı, sunucu tarafında sade tutulmuştur.
+function tenantUyarilariHesapla(tenantId) {
+  const backup = tenantBackupJson(tenantId);
+  const bugun = new Date();
+  const gunFarki = (tarihStr) => {
+    if (!tarihStr) return null;
+    const fark = (new Date(tarihStr) - bugun) / 86400000;
+    return Math.ceil(fark);
+  };
+  const uyarilar = [];
+  (backup.araclar || []).forEach((a) => {
+    const sg = gunFarki(a.sigorta), mu = gunFarki(a.muayene);
+    if (sg !== null && sg <= 7) uyarilar.push(`${a.ad}: sigorta ${sg <= 0 ? 'süresi doldu' : sg + ' gün kaldı'}`);
+    if (mu !== null && mu <= 7) uyarilar.push(`${a.ad}: muayene ${mu <= 0 ? 'süresi doldu' : mu + ' gün kaldı'}`);
+  });
+  (backup.faturalar || []).forEach((f) => {
+    if (f.tur === 'kesilen') {
+      const odemeler = (backup.kasaHareketleri || []).filter((h) => h.faturaId === f.id).reduce((s, h) => s + (+h.tutar || 0), 0);
+      const kalan = (+f.toplam || 0) - odemeler;
+      const vg = gunFarki(f.vadeTarih);
+      if (kalan > 0 && vg !== null && vg < 0) uyarilar.push(`Fatura ${f.no}: vadesi geçti`);
+    }
+  });
+  (backup.envanterKalemleri || []).forEach((k) => {
+    if (k.minMiktar != null && (+k.miktar || 0) <= (+k.minMiktar || 0)) uyarilar.push(`Stok: ${k.ad} kritik seviyede`);
+  });
+  return uyarilar;
+}
+
+// Her gece 00:00'da (iç zamanlayıcı VEYA dış tetikleyici — /api/backup/run-daily zaten
+// tetiklendiğinde bunu da çalıştırır), uyarısı olan şirketlere özet push bildirimi gönderir.
+async function runDailyPushDigest() {
+  if (!pushAktif) return { gonderildi: 0 };
+  const tenants = listTenants();
+  let toplam = 0;
+  for (const t of tenants) {
+    const uyarilar = tenantUyarilariHesapla(t.tenantId);
+    if (!uyarilar.length) continue;
+    const { gonderildi } = await sendPushToTenant(t.tenantId, {
+      title: `FiloPro — ${uyarilar.length} uyarı`,
+      body: uyarilar.slice(0, 3).join(' · ') + (uyarilar.length > 3 ? ` ve ${uyarilar.length - 3} tane daha` : ''),
+      url: './',
+    });
+    toplam += gonderildi;
+  }
+  return { gonderildi: toplam };
+}
 
 // ── Yapay Zeka Vekili (Proxy) ────────────────────────────────────────────────
 // FiloPro'nun AI Asistan modülü, API anahtarını tarayıcıda gizli tutamayacağı

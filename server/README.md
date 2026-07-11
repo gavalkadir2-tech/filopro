@@ -130,6 +130,38 @@ zamanlayıcı (`cron.schedule`) zaten otomatik olarak da çalışmaya devam eder
 dış tetikleyiciyi kapatmanıza gerek yoktur, ikisi çakışmaz (aynı gün içinde
 zaten gönderilmiş bir şirkete tekrar e-posta gitmez).
 
+## Tarayıcı Push Bildirimleri (opsiyonel)
+
+Sekme kapalıyken bile, kritik uyarıların (sigorta/muayene süresi dolan,
+vadesi geçen fatura, kritik stok) günlük özetini işletim sisteminin
+bildirim merkezinde gösterir. Aynı 00:00 zamanlayıcısını (iç veya
+cron-job.org üzerinden dış tetikleyici) kullanır — ayrıca bir kurulum
+gerekmez, e-posta yedeğiyle aynı anda tetiklenir.
+
+**Kurulum:**
+
+1. Sunucuyu kurduğunuz makinede/terminalde bir kereye mahsus:
+   ```
+   npx web-push generate-vapid-keys
+   ```
+2. Çıkan "Public Key" ve "Private Key" değerlerini `.env` dosyasına
+   `VAPID_PUBLIC_KEY` ve `VAPID_PRIVATE_KEY` olarak yazın.
+3. Sunucuyu yeniden başlatın/deploy edin.
+4. FiloPro içinde Ayarlar → Bildirimler bölümünden "Tarayıcı Bildirimlerini
+   Aç" düğmesine basıp tarayıcı izni verin (her cihaz/tarayıcı ayrı ayrı
+   açmalıdır — bildirimler o cihaza özeldir).
+
+SMTP gibi, VAPID anahtarları boş bırakılırsa bu özellik sessizce devre dışı
+kalır; senkron ve diğer her şey normal çalışmaya devam eder. Ayrıca e-posta
+yedeğinden bağımsızdır — sadece push, sadece e-posta, ya da ikisi birden
+etkinleştirilebilir.
+
+**⚠️ Önemli — eksik olan `sw.js` dosyası:** Push bildirimlerinin (ve genel
+olarak offline desteğin) çalışması için `index.html` ile **aynı klasörde**
+bir `sw.js` (service worker) dosyası bulunması gerekir. Bu proje daha önce
+bu dosyayı içermiyordu; eklenen `sw.js` dosyasını index.html'inizle aynı
+dizine (repo kökü) koyduğunuzdan emin olun.
+
 ## Mimari Notlar
 
 - `data/users.json` — tüm kullanıcılar (hangi şirkete ait, rolü, bcrypt ile
@@ -137,6 +169,7 @@ zaten gönderilmiş bir şirkete tekrar e-posta gitmez).
 - `data/tenants/<tenantId>.json` — o şirkete ait tüm FiloPro tabloları
   (araçlar, bakımlar, personel, vb.).
 - `data/tenants/<tenantId>.backup.json` — o şirketin yedek e-postası ayarı.
+- `data/tenants/<tenantId>.push.json` — o şirketteki cihazların push abonelikleri.
 - Şifreler bcrypt ile hash'lenir, asla düz metin saklanmaz.
 - Kullanıcı adları **platform genelinde benzersizdir** (iki farklı şirket aynı
   kullanıcı adını kullanamaz).
