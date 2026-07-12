@@ -39,6 +39,36 @@ Bu backend statik değildir, **GitHub Pages'te çalışmaz**. Ücretsiz/uygun se
 
 Deploy sonrası size bir URL verilir (ör. `https://filopro-sync-xxxx.onrender.com`).
 
+## Frontend: index.html + app.js (12 Temmuz 2026 mimari değişikliği)
+
+**⚠️ Önemli değişiklik:** Frontend artık **iki dosyadan** oluşuyor —
+`index.html` ve `app.js`. İkisi de **aynı klasörde** (repo kökünde, `sw.js`
+ile birlikte) bulunmalıdır.
+
+**Neden değişti?** Önceden `index.html` tek başına yeterliydi: React kodu
+JSX olarak dosyanın içine gömülüydü ve **Babel Standalone** adlı bir
+kütüphane, kullanıcının tarayıcısında, sayfa her açıldığında bu kodu
+JavaScript'e çeviriyordu. Uygulama büyüdükçe (7.500+ satır) bu çeviri işlemi
+her açılışta fark edilir bir gecikmeye ve tarayıcı konsolunda bir uyarıya
+(“Babel deoptimised the styling…”) yol açmaya başladı.
+
+Artık JSX kodu **önceden** (bu değişikliği yapan oturumda, esbuild ile) düz
+JavaScript'e çevrilip `app.js` olarak kaydediliyor. `index.html` artık sadece
+ince bir kabuk: kütüphaneleri (React, Recharts, vb.) yükler ve
+`<script src="app.js"></script>` ile derlenmiş kodu çalıştırır. Babel
+Standalone kütüphanesi tamamen kaldırıldı (birkaç MB'lık bir CDN indirmesi
+daha az).
+
+**Sizin için pratik sonucu:**
+- Deploy ederken `index.html`, `app.js`, `sw.js` — üçünü de aynı yere
+  koymanız gerekiyor (`server.js` ile karıştırmayın, o ayrı bir klasörde/
+  serviste kalmaya devam ediyor).
+- `sw.js`'in önbellek listesi de güncellendi (`filopro-v2`); bir kere daha
+  sert yenileme (`Ctrl+Shift+R`) yapmanız faydalı olur.
+- Bundan sonra kod değişikliği istediğinizde, ben (Claude) hem kaynak JSX
+  dosyasını güncelleyip hem de güncel `app.js`'i yeniden derleyip
+  ikisini birden teslim edeceğim — sizin ek bir şey yapmanıza gerek yok.
+
 ## Nasıl Kullanılır
 
 1. **Yeni şirket kaydı:** FiloPro uygulamasında Ayarlar → Senkronizasyon →
