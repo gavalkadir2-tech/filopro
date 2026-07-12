@@ -21,6 +21,7 @@ const nodemailer = require('nodemailer');
 const cron = require('node-cron');
 const webpush = require('web-push');
 const { authenticator } = require('otplib');
+const { OAuth2Client } = require('google-auth-library');
 
 const app = express();
 app.use(cors());
@@ -57,6 +58,23 @@ const mailer = (SMTP_USER && SMTP_PASS)
   : null;
 if (!mailer) {
   console.warn('UYARI: SMTP_USER/SMTP_PASS tanımlı değil. Günlük otomatik yedek e-postası devre dışı (senkron ve diğer özellikler etkilenmez).');
+}
+
+// ── Google ile Giriş — opsiyonel: yoksa sadece bu özellik devre dışı kalır ──────
+// Google Cloud Console'da bir OAuth 2.0 İstemci Kimliği (Web uygulaması) oluşturup
+// buraya yapıştırın. İstemci Kimliği "gizli" değildir, tarayıcıya da gönderilir.
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const googleClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
+if (!googleClient) {
+  console.warn('UYARI: GOOGLE_CLIENT_ID tanımlı değil. "Google ile Giriş" devre dışı (senkron ve diğer özellikler etkilenmez).');
+}
+async function verifyGoogleToken(credential) {
+  if (!googleClient) throw new Error('Google ile giriş sunucuda yapılandırılmamış.');
+  const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: GOOGLE_CLIENT_ID });
+  const payload = ticket.getPayload();
+  if (!payload || !payload.email) throw new Error('Google kimlik doğrulaması geçersiz.');
+  if (!payload.email_verified) throw new Error('Google hesabınızın e-postası doğrulanmamış.');
+  return { email: payload.email.toLowerCase(), name: payload.name || '' };
 }
 
 const DATA_DIR = path.join(__dirname, 'data');
@@ -175,7 +193,7 @@ app.get('/api/health', (req, res) => res.json({ ok: true, time: Date.now() }));
 
 // ── Yeni şirket kaydı (ilk kullanıcı = admin) ───────────────────────────────────
 app.post('/api/auth/register', rateLimit('register', 10), async (req, res) => {
-  const { companyName, username, password } = req.body || {};
+  const { companyName, username, password, email } = req.body || {};
   if (!companyName || !username || !password) {
     return res.status(400).json({ error: 'Şirket adı, kullanıcı adı ve şifre gerekli.' });
   }
@@ -187,6 +205,10 @@ app.post('/api/auth/register', rateLimit('register', 10), async (req, res) => {
   if (users.some((u) => u.username === uname)) {
     return res.status(409).json({ error: 'Bu kullanıcı adı zaten alınmış.' });
   }
+  const cleanEmail = email ? String(email).trim().toLowerCase() : undefined;
+  if (cleanEmail && users.some((u) => u.email === cleanEmail)) {
+    return res.status(409).json({ error: 'Bu e-posta adresiyle zaten bir hesap var.' });
+  }
   const tenantId = crypto.randomUUID();
   const passwordHash = await bcrypt.hash(password, 10);
   const user = {
@@ -194,6 +216,7 @@ app.post('/api/auth/register', rateLimit('register', 10), async (req, res) => {
     tenantId,
     companyName: String(companyName).trim(),
     username: uname,
+    email: cleanEmail,
     passwordHash,
     role: 'admin',
     createdAt: Date.now(),
@@ -211,8 +234,8 @@ app.post('/api/auth/login', rateLimit('login', 15), async (req, res) => {
   const uname = String(username).trim().toLowerCase();
   const users = readUsers();
   const user = users.find((u) => u.username === uname);
-  if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
-    return res.status(401).json({ error: 'Kullanıcı adı veya şifre hatalı.' });
+  if (!user || !user.passwordHash || !(await bcrypt.compare(password, user.passwordHash))) {
+    return res.status(401).json({ error: user && !user.passwordHash ? 'Bu hesap yalnızca "Google ile Giriş Yap" ile kullanılabilir.' : 'Kullanıcı adı veya şifre hatalı.' });
   }
   if (user.twoFactorEnabled) {
     return res.json({ requires2FA: true, tempToken: signTempToken(user) });
@@ -289,6 +312,137 @@ app.get('/api/auth/2fa/status', authMiddleware, (req, res) => {
   const users = readUsers();
   const user = users.find((u) => u.username === req.user.sub);
   res.json({ enabled: !!(user && user.twoFactorEnabled) });
+});
+
+// ── Google ile Giriş ─────────────────────────────────────────────────────────────
+// İstemcinin (index.html) buton çizmesi için Google İstemci Kimliğini döner.
+app.get('/api/auth/google/config', (req, res) => {
+  res.json({ available: !!GOOGLE_CLIENT_ID, clientId: GOOGLE_CLIENT_ID || null });
+});
+
+// Google ile giriş: eşleşen bir hesap varsa token verir (2FA açıksa doğrulama ister);
+// yoksa "hesap bulunamadı" döner, istemci bunu "Google ile Kaydol" akışına yönlendirir.
+app.post('/api/auth/google/login', rateLimit('login', 15), async (req, res) => {
+  const { credential } = req.body || {};
+  if (!credential) return res.status(400).json({ error: 'Google kimlik bilgisi gerekli.' });
+  let g;
+  try {
+    g = await verifyGoogleToken(credential);
+  } catch (e) {
+    return res.status(401).json({ error: e.message });
+  }
+  const users = readUsers();
+  const user = users.find((u) => u.email === g.email);
+  if (!user) {
+    return res.json({ accountFound: false, email: g.email, name: g.name });
+  }
+  if (user.twoFactorEnabled) {
+    return res.json({ requires2FA: true, tempToken: signTempToken(user) });
+  }
+  res.json({ token: signToken(user), companyName: user.companyName, role: user.role });
+});
+
+// Google ile YENİ şirket kaydı: bu Google e-postasıyla eşleşen hesap yoksa, doğrulanmış
+// Google e-postasını kullanarak sıfırdan bir şirket + admin kullanıcı oluşturur (şifresiz —
+// bu hesap yalnızca Google ile giriş yapabilir).
+app.post('/api/auth/google/register', rateLimit('register', 10), async (req, res) => {
+  const { credential, companyName } = req.body || {};
+  if (!credential || !companyName) return res.status(400).json({ error: 'Google kimlik bilgisi ve şirket adı gerekli.' });
+  let g;
+  try {
+    g = await verifyGoogleToken(credential);
+  } catch (e) {
+    return res.status(401).json({ error: e.message });
+  }
+  const users = readUsers();
+  if (users.some((u) => u.email === g.email)) {
+    return res.status(409).json({ error: 'Bu Google hesabıyla eşleşen bir kullanıcı zaten var. "Google ile Giriş Yap" seçeneğini kullanın.' });
+  }
+  let uname = g.email.split('@')[0].replace(/[^a-z0-9]/gi, '').toLowerCase() || 'kullanici';
+  let aday = uname, sayac = 1;
+  while (users.some((u) => u.username === aday)) { aday = `${uname}${sayac}`; sayac++; }
+  const tenantId = crypto.randomUUID();
+  const user = {
+    id: crypto.randomUUID(),
+    tenantId,
+    companyName: String(companyName).trim(),
+    username: aday,
+    email: g.email,
+    passwordHash: null, // yalnızca Google ile giriş
+    googleOnly: true,
+    role: 'admin',
+    createdAt: Date.now(),
+  };
+  users.push(user);
+  writeUsers(users);
+  writeTenantStore(tenantId, {});
+  res.json({ token: signToken(user), companyName: user.companyName, role: user.role, username: user.username });
+});
+
+// Zaten giriş yapmış bir kullanıcının hesabına Google'ı BAĞLAR (sonraki girişlerde de
+// kullanabilsin diye). Başka bir kullanıcı o Google e-postasını zaten kullanıyorsa reddedilir.
+app.post('/api/auth/google/link', authMiddleware, async (req, res) => {
+  const { credential } = req.body || {};
+  if (!credential) return res.status(400).json({ error: 'Google kimlik bilgisi gerekli.' });
+  let g;
+  try {
+    g = await verifyGoogleToken(credential);
+  } catch (e) {
+    return res.status(401).json({ error: e.message });
+  }
+  const users = readUsers();
+  if (users.some((u) => u.email === g.email && u.username !== req.user.sub)) {
+    return res.status(409).json({ error: 'Bu Google hesabı başka bir FiloPro kullanıcısına bağlı.' });
+  }
+  const user = users.find((u) => u.username === req.user.sub);
+  if (!user) return res.status(404).json({ error: 'Kullanıcı bulunamadı.' });
+  user.email = g.email;
+  writeUsers(users);
+  res.json({ ok: true, email: g.email });
+});
+
+app.post('/api/auth/google/unlink', authMiddleware, (req, res) => {
+  const users = readUsers();
+  const user = users.find((u) => u.username === req.user.sub);
+  if (!user) return res.status(404).json({ error: 'Kullanıcı bulunamadı.' });
+  if (user.googleOnly) return res.status(400).json({ error: 'Bu hesap yalnızca Google ile giriş yapabiliyor (şifresi yok); önce bir şifre belirlemeden Google bağlantısını kaldıramazsınız.' });
+  delete user.email;
+  writeUsers(users);
+  res.json({ ok: true });
+});
+
+// ── Hesabım (profil bilgisi ve şifre değiştirme) ────────────────────────────────
+app.get('/api/auth/me', authMiddleware, (req, res) => {
+  const users = readUsers();
+  const user = users.find((u) => u.username === req.user.sub);
+  if (!user) return res.status(404).json({ error: 'Kullanıcı bulunamadı.' });
+  res.json({
+    username: user.username,
+    email: user.email || null,
+    companyName: user.companyName,
+    role: user.role,
+    googleLinked: !!user.email,
+    googleOnly: !!user.googleOnly,
+    twoFactorEnabled: !!user.twoFactorEnabled,
+    createdAt: user.createdAt || null,
+  });
+});
+
+app.post('/api/auth/change-password', authMiddleware, rateLimit('changepw', 10), async (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  if (!newPassword || String(newPassword).length < 6) return res.status(400).json({ error: 'Yeni şifre en az 6 karakter olmalı.' });
+  const users = readUsers();
+  const user = users.find((u) => u.username === req.user.sub);
+  if (!user) return res.status(404).json({ error: 'Kullanıcı bulunamadı.' });
+  if (user.passwordHash) {
+    if (!currentPassword || !(await bcrypt.compare(currentPassword, user.passwordHash))) {
+      return res.status(401).json({ error: 'Mevcut şifre hatalı.' });
+    }
+  }
+  user.passwordHash = await bcrypt.hash(newPassword, 10);
+  user.googleOnly = false;
+  writeUsers(users);
+  res.json({ ok: true });
 });
 
 

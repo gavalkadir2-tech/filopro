@@ -162,6 +162,34 @@ bir `sw.js` (service worker) dosyası bulunması gerekir. Bu proje daha önce
 bu dosyayı içermiyordu; eklenen `sw.js` dosyasını index.html'inizle aynı
 dizine (repo kökü) koyduğunuzdan emin olun.
 
+## Google ile Giriş (opsiyonel)
+
+Kullanıcılar, kullanıcı adı/şifre yerine (veya buna ek olarak) Google
+hesaplarıyla giriş yapabilir/kaydolabilir.
+
+**Kurulum:**
+
+1. [console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials)
+   adresinde ücretsiz bir "OAuth client ID" (Web application) oluşturun.
+2. "Authorized JavaScript origins" alanına FiloPro'yu açtığınız adresi ekleyin.
+3. Oluşan İstemci Kimliğini `.env` dosyasına `GOOGLE_CLIENT_ID` olarak yapıştırın
+   (İstemci Gizli Anahtarı — Client Secret — gerekmez).
+4. Sunucuyu yeniden başlatın/deploy edin.
+
+**Nasıl çalışır:**
+- Giriş ekranında "Google ile Giriş Yap" butonu görünür.
+- Google e-postanızla eşleşen bir FiloPro hesabı varsa doğrudan giriş yapılır
+  (2FA açıksa yine kod istenir).
+- Eşleşen hesap yoksa, "Google ile Kaydol" akışına yönlendirilip yeni bir
+  şirket oluşturabilirsiniz — bu hesabın şifresi olmaz, yalnızca Google ile
+  giriş yapılabilir (Ayarlar → Hesabım'dan istenirse sonradan bir şifre de
+  eklenebilir).
+- Mevcut (şifreli) bir hesap, Ayarlar → Hesabım'dan Google hesabını
+  bağlayıp/kaldırabilir.
+
+`GOOGLE_CLIENT_ID` boş bırakılırsa bu özellik sessizce devre dışı kalır;
+kullanıcı adı/şifre ile giriş etkilenmez.
+
 ## İki Faktörlü Doğrulama (2FA)
 
 Ek kurulum **gerektirmez** — otplib (TOTP) sunucuya dahildir. Ayarlar →
