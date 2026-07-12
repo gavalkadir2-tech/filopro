@@ -553,6 +553,20 @@ async function fpSifreDegistir(mevcutSifre,yeniSifre){
   return data;
 }
 
+// Fiş/fatura fotoğrafından yapay zeka ile veri okur. "prompt" alınacak alanları tarif eder,
+// model bir JSON nesnesiyle cevap verir. Şu an Groq'ta görü desteği "önizleme" statüsündeki
+// tek modelde (qwen/qwen3.6-27b) olduğundan sonuç bazen eksik/hatalı olabilir — bu yüzden
+// dönen veri hiçbir zaman doğrudan kaydedilmez, her zaman kullanıcı onayına sunulur.
+async function fpAiFisOku(imageDataUrl,prompt){
+  const cfg=getSyncCfg();
+  if(!cfg.token||!cfg.url)throw new Error('Önce Ayarlar > Senkronizasyon\'dan sunucuya bağlanmalısınız.');
+  const res=await fetch(`${cfg.url}/api/ai/vision`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${cfg.token}`},body:JSON.stringify({imageDataUrl,prompt})});
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(data.error||'Fiş okunamadı.');
+  try{return JSON.parse(data.text);}
+  catch{throw new Error('Yapay zeka geçerli bir yanıt üretemedi, lütfen elle girin.');}
+}
+
 async function fpSyncAddUser(username,password,role){
   const cfg=getSyncCfg();
   if(!cfg.token||!cfg.url)throw new Error('Önce sunucuya bağlanmalısınız.');
@@ -2258,6 +2272,7 @@ function BakimTakibi(){
 function YakitYonetimi(){
   const araclar=LS.get('araclar');
   const [yakitlar,setYakitlar]=useState(LS.get('yakitlar')),[modal,setModal]=useState(false),[form,setForm]=useState({}),[err,setErr]=useState('');
+  const [fisTaraniyor,setFisTaraniyor]=useState(false);
   const save=()=>{
     const hata=validate(form,{toplamFiyat:[f=>+f.toplamFiyat>0,'Toplam fiyat 0\'dan büyük olmalıdır.'],fiyat:[f=>+f.fiyat>0,'Litre fiyatı 0\'dan büyük olmalıdır.'],aracId:[f=>!!f.aracId,'Araç seçimi zorunludur.']});
     if(hata){setErr(hata);return;}
@@ -2266,6 +2281,25 @@ function YakitYonetimi(){
     const n=form.id?yakitlar.map(y=>y.id===form.id?{...form,miktar,toplam}:y):[...yakitlar,{...form,id:uid(),miktar,toplam,tarih:form.tarih||today()}];LS.set('yakitlar',n);setYakitlar(n);setModal(false);
   };
   const del=async(id)=>{if(!(await fpConfirm('Bu ikmal kaydı silinsin mi?')))return;const n=yakitlar.filter(y=>y.id!==id);LS.set('yakitlar',n);setYakitlar(n);};
+  const fisTara=async(dosya)=>{
+    setFisTaraniyor(true);
+    try{
+      const veri=await resimSikistir(dosya,1024,0.78);
+      const sonuc=await fpAiFisOku(veri,'Bu bir yakıt/akaryakıt fişi veya faturasıdır. Fişteki bilgileri oku ve SADECE şu alanları içeren bir JSON nesnesi döndür (metin ekleme, sadece JSON): {"toplamFiyat": ödenen toplam tutar (sayı, TL), "fiyat": litre birim fiyatı varsa (sayı, yoksa null), "tarih": fiş tarihi (YYYY-MM-DD formatında, yoksa null), "depo": istasyon/bayi adı (metin, yoksa null)}. Emin olmadığın alanları null bırak, tahmin uydurma.');
+      setForm(f=>({
+        ...f,
+        toplamFiyat:sonuc.toplamFiyat!=null?+sonuc.toplamFiyat:f.toplamFiyat,
+        fiyat:sonuc.fiyat!=null?+sonuc.fiyat:f.fiyat,
+        tarih:sonuc.tarih||f.tarih,
+        depo:sonuc.depo||f.depo,
+      }));
+      fpToast('📷 Fiş okundu, alanları kontrol edip kaydedin.');
+    }catch(e){
+      fpToast(e.message||'Fiş okunamadı, lütfen elle girin.','error');
+    }finally{
+      setFisTaraniyor(false);
+    }
+  };
   const buAyToplam=yakitlar.filter(y=>y.tarih?.startsWith(today().slice(0,7))).reduce((s,y)=>s+(+y.toplam||0),0);
   const buAyLitre=yakitlar.filter(y=>y.tarih?.startsWith(today().slice(0,7))).reduce((s,y)=>s+(+y.miktar||0),0);
   const ortFiyat=buAyLitre>0?buAyToplam/buAyLitre:0;
@@ -2279,6 +2313,13 @@ function YakitYonetimi(){
     <div style={S.card}><table style={S.tbl}><thead><tr><th style={S.th}>Araç</th><th style={S.th}>Tarih</th><th style={S.th}>Miktar</th><th style={S.th}>Birim Fiyat</th><th style={S.th}>Toplam</th><th style={S.th}>Depo</th><th style={S.th}></th></tr></thead>
     <tbody>{[...yakitlar].sort((a,b)=>b.tarih?.localeCompare(a.tarih)).map(y=>{const a=araclar.find(x=>x.id===y.aracId);return(<tr key={y.id}><td style={S.td}><strong style={{color:C.white}}>{a?.ad||'—'}</strong></td><td style={S.td}>{fmtDate(y.tarih)}</td><td style={S.td}>{y.miktar} Lt</td><td style={S.td}>{fmtTL(y.fiyat)}</td><td style={S.td}><strong style={{color:C.accent}}>{fmtTL(y.toplam)}</strong></td><td style={S.td}>{y.depo}</td><td style={S.td}><div style={{display:'flex',gap:5}}><button style={S.btnO} onClick={()=>{setForm({...y,toplamFiyat:y.toplam});setErr('');setModal(true);}}>✏️</button><button style={S.btnR} onClick={()=>del(y.id)}>🗑</button></div></td></tr>);})}</tbody></table></div>
     {modal&&(<Modal title={form.id?'İkmal Düzenle':'Yeni İkmal'} onClose={()=>setModal(false)}>
+      {!form.id&&<div style={{marginBottom:14,paddingBottom:14,borderBottom:`1px solid ${C.border}`}}>
+        <label style={{...S.btnO,display:'inline-flex',alignItems:'center',gap:6,cursor:fisTaraniyor?'default':'pointer',opacity:fisTaraniyor?0.6:1}}>
+          {fisTaraniyor?'⏳ Fiş okunuyor...':'📷 Fişi Fotoğrafla / Tara (AI)'}
+          <input type="file" accept="image/*" capture="environment" style={{display:'none'}} disabled={fisTaraniyor} onChange={e=>{const d=e.target.files?.[0];e.target.value='';if(d)fisTara(d);}}/>
+        </label>
+        <div style={{fontSize:11,color:C.muted,marginTop:6}}>ℹ️ Deneysel özellik — yapay zeka bazen yanlış/eksik okuyabilir, kaydetmeden önce mutlaka kontrol edin.</div>
+      </div>}
       <FG label="Araç"><select style={S.sel} value={form.aracId||''} onChange={e=>setForm(f=>({...f,aracId:idVal(e.target.value)}))}><option value="">— Seçiniz —</option>{araclar.map(a=><option key={a.id} value={a.id}>{a.ad}</option>)}</select></FG>
       <div style={S.g2}><FG label="Tarih"><input type="date" style={S.inp} value={form.tarih||''} onChange={e=>setForm(f=>({...f,tarih:e.target.value}))}/></FG><FG label="Depo / Pompa"><input style={S.inp} value={form.depo||''} onChange={e=>setForm(f=>({...f,depo:e.target.value}))}/></FG></div>
       <div style={S.g2}><FG label="Toplam Fiyat (₺)"><input type="number" step="0.01" style={S.inp} value={form.toplamFiyat??''} onChange={e=>setForm(f=>({...f,toplamFiyat:+e.target.value}))}/></FG><FG label="Litre Fiyatı (₺)"><input type="number" step="0.01" style={S.inp} value={form.fiyat||''} onChange={e=>setForm(f=>({...f,fiyat:+e.target.value}))}/></FG></div>
