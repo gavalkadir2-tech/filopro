@@ -553,6 +553,16 @@ async function fpSifreDegistir(mevcutSifre,yeniSifre){
   return data;
 }
 
+// Basit, tek seferlik metin sorguları için genel amaçlı yardımcı (sohbet geçmişi tutmaz).
+async function fpAiSor(prompt,maxTokens=300){
+  const cfg=getSyncCfg();
+  if(!cfg.token||!cfg.url)throw new Error('Önce Ayarlar > Senkronizasyon\'dan sunucuya bağlanmalısınız.');
+  const res=await fetch(`${cfg.url}/api/ai/chat`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${cfg.token}`},body:JSON.stringify({prompt,maxTokens})});
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(data.error||'Yapay zeka yanıt veremedi.');
+  return data.text||'';
+}
+
 // Fiş/fatura fotoğrafından yapay zeka ile veri okur. "prompt" alınacak alanları tarif eder,
 // model bir JSON nesnesiyle cevap verir. Şu an Groq'ta görü desteği "önizleme" statüsündeki
 // tek modelde (qwen/qwen3.6-27b) olduğundan sonuç bazen eksik/hatalı olabilir — bu yüzden
@@ -2238,6 +2248,18 @@ function AraclarListesi(){
 function BakimTakibi(){
   const araclar=LS.get('araclar');
   const [bakimlar,setBakimlar]=useState(LS.get('bakimlar')),[modal,setModal]=useState(false),[form,setForm]=useState({}),[err,setErr]=useState('');
+  const [checklistOneriliyor,setChecklistOneriliyor]=useState(false);
+  const checklistOner=async()=>{
+    if(!form.tip?.trim()){fpToast('Önce Bakım Tipi girin.');return;}
+    const arac=araclar.find(a=>a.id===form.aracId);
+    setChecklistOneriliyor(true);
+    try{
+      const yanit=await fpAiSor(`Sen bir ağır iş makinesi bakım ustasısın. "${arac?.tip||'iş makinesi'}" tipi bir araç için "${form.tip}" bakımında kontrol edilmesi/yapılması gereken maddelerin kısa bir kontrol listesini (checklist) Türkçe olarak, her satırda "- " ile başlayan maddeler hâlinde yaz. En fazla 8 madde, kısa ve pratik olsun. Başlık veya ekstra açıklama ekleme, sadece madde listesi.`,400);
+      setForm(f=>({...f,notlar:(f.notlar?f.notlar+'\n\n':'')+'🤖 Önerilen Kontrol Listesi:\n'+yanit}));
+      fpToast('🤖 Kontrol listesi Notlar alanına eklendi.');
+    }catch(e){fpToast(e.message,'error');}
+    finally{setChecklistOneriliyor(false);}
+  };
   const save=()=>{
     const hata=validate(form,{aracId:[f=>!!f.aracId,'Araç seçimi zorunludur.'],tip:[f=>!!f.tip?.trim(),'Bakım tipi zorunludur.']});
     if(hata){setErr(hata);return;}
@@ -2262,7 +2284,8 @@ function BakimTakibi(){
       <FG label="Bakım Tipi"><input style={S.inp} value={form.tip||''} onChange={e=>setForm(f=>({...f,tip:e.target.value}))} placeholder="Yağ değişimi..."/></FG>
       <div style={S.g2}><FG label="Tarih"><input type="date" style={S.inp} value={form.tarih||''} onChange={e=>setForm(f=>({...f,tarih:e.target.value}))}/></FG><FG label="Maliyet (₺)"><input type="number" style={S.inp} value={form.maliyet||''} onChange={e=>setForm(f=>({...f,maliyet:+e.target.value}))}/></FG></div>
       <FG label="Durum"><select style={S.sel} value={form.durum||'planli'} onChange={e=>setForm(f=>({...f,durum:e.target.value}))}><option value="planli">Planlı</option><option value="bekliyor">Bekliyor</option><option value="tamamlandi">Tamamlandı</option></select></FG>
-      <FG label="Notlar"><textarea style={S.ta} value={form.notlar||''} onChange={e=>setForm(f=>({...f,notlar:e.target.value}))}/></FG>
+      <button type="button" style={{...S.btnO,marginBottom:12}} onClick={checklistOner} disabled={checklistOneriliyor||!form.tip?.trim()}>{checklistOneriliyor?'⏳ Hazırlanıyor...':'🤖 AI Kontrol Listesi Öner'}</button>
+      <FG label="Notlar"><textarea style={{...S.ta,minHeight:100}} value={form.notlar||''} onChange={e=>setForm(f=>({...f,notlar:e.target.value}))}/></FG>
       <FormError msg={err}/>
       <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginTop:8}}><button style={S.btnO} onClick={()=>setModal(false)}>İptal</button><button style={S.btn()} onClick={save}>Kaydet</button></div>
     </Modal>)}
@@ -2495,6 +2518,17 @@ const ADAY_ASAMA_LABEL={basvuru:'Başvuru',mulakat:'Mülakat',teklif:'Teklif',is
 function IseAlim(){
   const [adaylar,setAdaylar]=useState(LS.get('adaylar')),[modal,setModal]=useState(false),[form,setForm]=useState({}),[err,setErr]=useState('');
   const [personelModal,setPersonelModal]=useState(null);
+  const [aiDegerlendiriliyor,setAiDegerlendiriliyor]=useState(false);
+  const aiDegerlendir=async()=>{
+    if(!form.notlar?.trim()){fpToast('Önce Notlar alanına adayın deneyim/özgeçmiş bilgilerini girin.');return;}
+    setAiDegerlendiriliyor(true);
+    try{
+      const yanit=await fpAiSor(`Sen bir İK uzmanısın. Aşağıdaki "${form.pozisyon||'—'}" pozisyonu için bir aday hakkındaki notları/özgeçmiş bilgisini değerlendir. Türkçe, 3-4 cümlelik kısa bir ön değerlendirme yaz: pozisyona uygunluk, öne çıkan güçlü yönler, varsa dikkat edilmesi gereken noktalar. Kesin işe alım kararı verme, sadece görüşmeyi yapacak kişiye özet sun.\nPozisyon: ${form.pozisyon||'—'}\nAday notları: ${form.notlar}`,350);
+      setForm(f=>({...f,aiDegerlendirme:yanit}));
+      fpToast('🤖 AI ön değerlendirmesi hazırlandı.');
+    }catch(e){fpToast(e.message,'error');}
+    finally{setAiDegerlendiriliyor(false);}
+  };
   const save=()=>{
     const hata=validate(form,{ad:[f=>!!f.ad?.trim(),'Ad Soyad zorunludur.'],pozisyon:[f=>!!f.pozisyon?.trim(),'Pozisyon zorunludur.']});
     if(hata){setErr(hata);return;}
@@ -2528,6 +2562,7 @@ function IseAlim(){
         <div style={{fontSize:11,color:C.accent,marginTop:4}}>{a.pozisyon}</div>
         <div style={{fontSize:11,color:C.muted,marginTop:4}}>📞 {a.tel||'—'}</div>
         <div style={{fontSize:11,color:C.muted,marginTop:2}}>📅 {fmtDate(a.basvuruTarihi)}</div>
+        {a.aiDegerlendirme&&<div style={{fontSize:11,color:C.purple,marginTop:4}}>🤖 AI değerlendirmesi mevcut</div>}
         <div style={{display:'flex',gap:5,marginTop:10,flexWrap:'wrap'}}>
           {asama==='basvuru'&&<button style={S.btnO} onClick={()=>asamaTasi(a.id,'mulakat')}>🗣️ Mülakata Al</button>}
           {asama==='mulakat'&&<button style={S.btnO} onClick={()=>asamaTasi(a.id,'teklif')}>📝 Teklif Ver</button>}
@@ -2542,7 +2577,9 @@ function IseAlim(){
       <div style={S.g2}><FG label="Ad Soyad"><input style={S.inp} value={form.ad||''} onChange={e=>setForm(f=>({...f,ad:e.target.value}))}/></FG><FG label="Pozisyon"><input style={S.inp} value={form.pozisyon||''} onChange={e=>setForm(f=>({...f,pozisyon:e.target.value}))}/></FG></div>
       <div style={S.g2}><FG label="Telefon"><input style={S.inp} value={form.tel||''} onChange={e=>setForm(f=>({...f,tel:e.target.value}))}/></FG><FG label="E-posta"><input style={S.inp} value={form.email||''} onChange={e=>setForm(f=>({...f,email:e.target.value}))}/></FG></div>
       <FG label="Başvuru Tarihi"><input type="date" style={S.inp} value={form.basvuruTarihi||''} onChange={e=>setForm(f=>({...f,basvuruTarihi:e.target.value}))}/></FG>
-      <FG label="Notlar"><textarea style={S.ta} value={form.notlar||''} onChange={e=>setForm(f=>({...f,notlar:e.target.value}))}/></FG>
+      <FG label="Notlar / Deneyim, Özgeçmiş Bilgisi"><textarea style={S.ta} value={form.notlar||''} onChange={e=>setForm(f=>({...f,notlar:e.target.value}))} placeholder="Adayın deneyimi, becerileri, görüşme notları..."/></FG>
+      <button type="button" style={{...S.btnO,marginBottom:12}} onClick={aiDegerlendir} disabled={aiDegerlendiriliyor||!form.notlar?.trim()}>{aiDegerlendiriliyor?'⏳ Değerlendiriliyor...':'🤖 AI Ön Değerlendirme Yap'}</button>
+      {form.aiDegerlendirme&&<div style={{...S.alert(C.purple),marginBottom:12,lineHeight:1.5}}>{form.aiDegerlendirme}</div>}
       <FormError msg={err}/>
       <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginTop:8}}><button style={S.btnO} onClick={()=>setModal(false)}>İptal</button><button style={S.btn()} onClick={save}>Kaydet</button></div>
     </Modal>)}
@@ -4108,6 +4145,19 @@ function ButceTakibi(){
 function GelirGider(){
   const projeler=LS.get('projeler'),hesaplar=LS.get('hesaplar');
   const [kayitlar,setKayitlar]=useState(LS.get('gelirGider')),[modal,setModal]=useState(false),[form,setForm]=useState({}),[ayFiltre,setAyFiltre]=useState(thisMonth()),[turFiltre,setTurFiltre]=useState('tum'),[err,setErr]=useState('');
+  const [kategoriOneriliyor,setKategoriOneriliyor]=useState(false);
+  const kategoriOner=async()=>{
+    if(!form.aciklama?.trim()){fpToast('Önce açıklama girin.');return;}
+    setKategoriOneriliyor(true);
+    try{
+      const secenekler=form.tur==='gider'?giderKategorileri():gelirKategorileri();
+      const yanit=await fpAiSor(`Bir muhasebe kaydının açıklamasına bakarak, aşağıdaki kategori listesinden EN UYGUN olanı seç. Sadece listedeki kategori adını birebir yaz, başka hiçbir şey yazma.\nAçıklama: "${form.aciklama}"\nKategoriler: ${secenekler.join(', ')}`,60);
+      const bulunan=secenekler.find(k=>yanit.toLocaleLowerCase('tr-TR').includes(k.toLocaleLowerCase('tr-TR')));
+      if(bulunan){setForm(f=>({...f,kategori:bulunan}));fpToast(`🤖 Önerilen kategori: ${bulunan}`);}
+      else fpToast('Uygun bir kategori önerilemedi, elle seçin.','error');
+    }catch(e){fpToast(e.message,'error');}
+    finally{setKategoriOneriliyor(false);}
+  };
   const save=()=>{
     const hata=validate(form,{tutar:[f=>+f.tutar>0,'Tutar 0\'dan büyük olmalıdır.'],aciklama:[f=>!!f.aciklama?.trim(),'Açıklama zorunludur.']});
     if(hata){setErr(hata);return;}
@@ -4135,8 +4185,9 @@ function GelirGider(){
     <table style={S.tbl}><thead><tr><th style={S.th}>Belge No</th><th style={S.th}>Tarih</th><th style={S.th}>Tür</th><th style={S.th}>Kategori</th><th style={S.th}>Açıklama</th><th style={S.th}>Tutar</th><th style={S.th}></th></tr></thead>
     <tbody>{[...filtreli].sort((a,b)=>b.tarih?.localeCompare(a.tarih)).map(k=>(<tr key={k.id}><td style={S.td}><code style={{fontSize:11,color:C.muted}}>{k.belgeNo}</code></td><td style={S.td}>{fmtDate(k.tarih)}</td><td style={S.td}><Badge d={k.tur}/></td><td style={S.td}>{k.kategori}</td><td style={S.td}><span style={{fontSize:12}}>{k.aciklama}</span></td><td style={S.td}><strong style={{color:k.tur==='gelir'?C.green:C.red}}>{k.tur==='gelir'?'+':'−'}{fmtTL(k.tutar)}</strong></td><td style={S.td}><div style={{display:'flex',gap:5}}><button style={S.btnO} onClick={()=>{setForm(k);setErr('');setModal(true);}}>✏️</button><button style={S.btnR} onClick={()=>del(k.id)}>🗑</button></div></td></tr>))}</tbody></table></div>
     {modal&&(<Modal title={form.id?'Kayıt Düzenle':(form.tur==='gelir'?'Yeni Gelir':'Yeni Gider')} onClose={()=>setModal(false)}>
-      <div style={S.g2}><FG label="Tür"><select style={S.sel} value={form.tur||'gelir'} onChange={e=>setForm(f=>({...f,tur:e.target.value,kategori:e.target.value==='gelir'?gelirKategorileri()[0]:giderKategorileri()[0]}))}><option value="gelir">Gelir</option><option value="gider">Gider</option></select></FG><FG label="Kategori"><select style={S.sel} value={form.kategori||''} onChange={e=>setForm(f=>({...f,kategori:e.target.value}))}>{(form.tur==='gider'?giderKategorileri():gelirKategorileri()).map(k=><option key={k} value={k}>{k}</option>)}</select></FG></div>
       <FG label="Açıklama"><input style={S.inp} value={form.aciklama||''} onChange={e=>setForm(f=>({...f,aciklama:e.target.value}))}/></FG>
+      <div style={S.g2}><FG label="Tür"><select style={S.sel} value={form.tur||'gelir'} onChange={e=>setForm(f=>({...f,tur:e.target.value,kategori:e.target.value==='gelir'?gelirKategorileri()[0]:giderKategorileri()[0]}))}><option value="gelir">Gelir</option><option value="gider">Gider</option></select></FG><FG label="Kategori"><select style={S.sel} value={form.kategori||''} onChange={e=>setForm(f=>({...f,kategori:e.target.value}))}>{(form.tur==='gider'?giderKategorileri():gelirKategorileri()).map(k=><option key={k} value={k}>{k}</option>)}</select></FG></div>
+      <button type="button" style={{...S.btnO,fontSize:11,padding:'5px 10px',marginTop:-8,marginBottom:14}} onClick={kategoriOner} disabled={kategoriOneriliyor||!form.aciklama?.trim()}>{kategoriOneriliyor?'⏳ Öneriliyor...':'🤖 Açıklamaya Göre Kategori Öner'}</button>
       <TutarKdvAlani form={form} setForm={setForm}/>
       <div style={S.g2}><FG label="Tarih"><input type="date" style={S.inp} value={form.tarih||''} onChange={e=>setForm(f=>({...f,tarih:e.target.value}))}/></FG><FG label="İlgili Proje"><select style={S.sel} value={form.projeId||''} onChange={e=>setForm(f=>({...f,projeId:idVal(e.target.value)}))}><option value="">— Yok —</option>{projeler.map(p=><option key={p.id} value={p.id}>{p.ad}</option>)}</select></FG></div>
       <FormError msg={err}/>
