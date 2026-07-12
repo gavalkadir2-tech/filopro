@@ -48,6 +48,7 @@ window.addEventListener('appinstalled',function(){
   window.dispatchEvent(new Event('fp-install-done'));
 });
 </script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/prop-types/15.8.1/prop-types.min.js"></script>
@@ -469,6 +470,69 @@ async function fp2FAKapat(code){
   const res=await fetch(`${cfg.url}/api/auth/2fa/disable`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${cfg.token}`},body:JSON.stringify({code})});
   const data=await res.json().catch(()=>({}));
   if(!res.ok)throw new Error(data.error||'Kapatılamadı.');
+  return data;
+}
+
+// ── Google ile Giriş ────────────────────────────────────────────────────────────
+async function fpGoogleConfig(url){
+  const res=await fetch(`${url}/api/auth/google/config`);
+  const data=await res.json().catch(()=>({available:false}));
+  return data;
+}
+async function fpGoogleLogin(url,credential){
+  const res=await fetch(`${url}/api/auth/google/login`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({credential})});
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(data.error||'Google girişi başarısız.');
+  if(data.token){
+    setSyncCfg({url,token:data.token,username:null,companyName:data.companyName,role:data.role});
+    setSyncMeta({updatedAt:{},lastPull:0});
+    setDirtyRecords({records:{},settings:null});
+    _emitSyncStatus({state:'bagli',error:null,pending:0,lastSync:null});
+  }
+  return data; // {token,...} | {requires2FA,tempToken} | {accountFound:false,email,name}
+}
+async function fpGoogleRegister(url,credential,companyName){
+  const res=await fetch(`${url}/api/auth/google/register`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({credential,companyName})});
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(data.error||'Google ile kayıt başarısız.');
+  setSyncCfg({url,token:data.token,username:data.username,companyName:data.companyName,role:data.role});
+  setSyncMeta({updatedAt:{},lastPull:0});
+  setDirtyRecords({records:{},settings:null});
+  _emitSyncStatus({state:'bagli',error:null,pending:0,lastSync:null});
+  return data;
+}
+async function fpGoogleLink(credential){
+  const cfg=getSyncCfg();
+  if(!cfg.token||!cfg.url)throw new Error('Önce sunucuya bağlanmalısınız.');
+  const res=await fetch(`${cfg.url}/api/auth/google/link`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${cfg.token}`},body:JSON.stringify({credential})});
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(data.error||'Bağlanamadı.');
+  return data;
+}
+async function fpGoogleUnlink(){
+  const cfg=getSyncCfg();
+  if(!cfg.token||!cfg.url)throw new Error('Önce sunucuya bağlanmalısınız.');
+  const res=await fetch(`${cfg.url}/api/auth/google/unlink`,{method:'POST',headers:{'Authorization':`Bearer ${cfg.token}`}});
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(data.error||'Kaldırılamadı.');
+  return data;
+}
+
+// ── Hesabım ────────────────────────────────────────────────────────────────────
+async function fpHesapBilgisi(){
+  const cfg=getSyncCfg();
+  if(!cfg.token||!cfg.url)throw new Error('Önce sunucuya bağlanmalısınız.');
+  const res=await fetch(`${cfg.url}/api/auth/me`,{headers:{'Authorization':`Bearer ${cfg.token}`}});
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(data.error||'Hesap bilgisi alınamadı.');
+  return data;
+}
+async function fpSifreDegistir(mevcutSifre,yeniSifre){
+  const cfg=getSyncCfg();
+  if(!cfg.token||!cfg.url)throw new Error('Önce sunucuya bağlanmalısınız.');
+  const res=await fetch(`${cfg.url}/api/auth/change-password`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${cfg.token}`},body:JSON.stringify({currentPassword:mevcutSifre,newPassword:yeniSifre})});
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(data.error||'Şifre değiştirilemedi.');
   return data;
 }
 
@@ -1219,10 +1283,13 @@ const buildInvoiceHTML=(f,hareketler)=>{
   .status{display:inline-block;padding:5px 14px;border-radius:20px;font-size:12px;font-weight:700;margin-top:10px;color:#fff;background:${durumRenk};}
 </style></head><body>
 <div class="head">
-  <div>
-    <div class="firma">${s.firmaAdi||''}</div>
-    <div class="muted">${s.firmaAdres||''}</div>
-    <div class="muted">${s.firmaTel||''}${s.firmaVergiNo?' · VKN: '+s.firmaVergiNo:''}${s.firmaVergiDaire?' · '+s.firmaVergiDaire:''}</div>
+  <div style="display:flex;gap:14px;align-items:flex-start;">
+    ${s.firmaLogo?`<img src="${s.firmaLogo}" alt="Logo" style="width:56px;height:56px;object-fit:contain;border-radius:8px;"/>`:''}
+    <div>
+      <div class="firma">${s.firmaAdi||''}</div>
+      <div class="muted">${s.firmaAdres||''}</div>
+      <div class="muted">${s.firmaTel||''}${s.firmaVergiNo?' · VKN: '+s.firmaVergiNo:''}${s.firmaVergiDaire?' · '+s.firmaVergiDaire:''}</div>
+    </div>
   </div>
   <div style="text-align:right;">
     <h1>${f.tur==='kesilen'?'FATURA':'ALIŞ FATURASI'}</h1>
@@ -1276,9 +1343,12 @@ const buildReportHTML=(opts)=>{
   @media print{body{padding:15px;}}
 </style></head><body>
 <div class="head">
-  <div>
-    <div class="firma">${s.firmaAdi||'FiloPro'}</div>
-    <div class="muted">${s.firmaAdres||''}</div>
+  <div style="display:flex;gap:12px;align-items:flex-start;">
+    ${s.firmaLogo?`<img src="${s.firmaLogo}" alt="Logo" style="width:48px;height:48px;object-fit:contain;border-radius:6px;"/>`:''}
+    <div>
+      <div class="firma">${s.firmaAdi||'FiloPro'}</div>
+      <div class="muted">${s.firmaAdres||''}</div>
+    </div>
   </div>
   <div style="text-align:right;">
     <h1>${baslik}</h1>
@@ -4905,6 +4975,118 @@ function PushBildirimAyarlari(){
 }
 
 
+// "Hesabım" — kullanıcının kendi hesap bilgileri, şifre değiştirme, Google hesabı
+// bağlama/kaldırma ve 2FA (Sunucu2FAAyarlari) tek bir ekranda toplanır.
+function HesabimSekmesi(){
+  const bagli=!!getSyncCfg().token;
+  const [bilgi,setBilgi]=useState(null);
+  const [yukleniyor,setYukleniyor]=useState(true);
+  const [mevcutSifre,setMevcutSifre]=useState(''),[yeniSifre,setYeniSifre]=useState(''),[yeniSifreTekrar,setYeniSifreTekrar]=useState('');
+  const [sifreHata,setSifreHata]=useState(''),[sifreIslemde,setSifreIslemde]=useState(false);
+  const [googleClientId,setGoogleClientId]=useState(null);
+  const [googleIslemde,setGoogleIslemde]=useState(false);
+  const googleBtnRef=useRef(null);
+
+  const yukle=async()=>{
+    if(!bagli){setYukleniyor(false);return;}
+    setYukleniyor(true);
+    try{setBilgi(await fpHesapBilgisi());}catch{setBilgi(null);}
+    finally{setYukleniyor(false);}
+  };
+  useEffect(()=>{yukle();},[bagli]);
+
+  useEffect(()=>{
+    if(!bagli)return;
+    fpGoogleConfig(getSyncCfg().url).then(d=>setGoogleClientId(d.available?d.clientId:null)).catch(()=>setGoogleClientId(null));
+  },[bagli]);
+
+  useEffect(()=>{
+    if(!googleClientId||!googleBtnRef.current||bilgi?.googleLinked)return;
+    let deneme=0;
+    const googleBagla=async(credential)=>{
+      setGoogleIslemde(true);
+      try{await fpGoogleLink(credential);fpToast('✅ Google hesabı bağlandı.');await yukle();}
+      catch(e){fpToast(e.message,'error');}
+      finally{setGoogleIslemde(false);}
+    };
+    const dene=()=>{
+      if(window.google?.accounts?.id){
+        window.google.accounts.id.initialize({client_id:googleClientId,callback:(resp)=>googleBagla(resp.credential)});
+        window.google.accounts.id.renderButton(googleBtnRef.current,{theme:'outline',size:'large',width:280,text:'signin_with'});
+      }else if(deneme<25){deneme++;setTimeout(dene,200);}
+    };
+    dene();
+    // eslint-disable-next-line
+  },[googleClientId,bilgi?.googleLinked]);
+
+  const googleKaldir=async()=>{
+    if(!(await fpConfirm('Google hesabı bağlantısı kaldırılsın mı? Artık Google ile giriş yapamazsınız.')))return;
+    try{await fpGoogleUnlink();fpToast('Google bağlantısı kaldırıldı.');await yukle();}catch(e){fpToast(e.message,'error');}
+  };
+
+  const sifreKaydet=async(e)=>{
+    e.preventDefault();
+    setSifreHata('');
+    if(yeniSifre.length<6){setSifreHata('Yeni şifre en az 6 karakter olmalı.');return;}
+    if(yeniSifre!==yeniSifreTekrar){setSifreHata('Yeni şifreler eşleşmiyor.');return;}
+    setSifreIslemde(true);
+    try{
+      await fpSifreDegistir(mevcutSifre,yeniSifre);
+      fpToast('✅ Şifre güncellendi.');
+      setMevcutSifre('');setYeniSifre('');setYeniSifreTekrar('');
+      await yukle();
+    }catch(err){setSifreHata(err.message||'Şifre değiştirilemedi.');}
+    finally{setSifreIslemde(false);}
+  };
+
+  if(!bagli)return(<InfoBox color={C.blue}>ℹ️ Hesap bilgilerinizi görmek için önce Ayarlar &gt; Senkronizasyon'dan sunucuya bağlanmalısınız.</InfoBox>);
+  if(yukleniyor)return(<div style={{...S.card,fontSize:13,color:C.muted}}>Yükleniyor…</div>);
+  if(!bilgi)return(<InfoBox color={C.red}>⚠️ Hesap bilgisi alınamadı.</InfoBox>);
+
+  return(<div>
+    <div style={S.card}>
+      <div style={S.secTitle}>👤 Hesap Bilgileri</div>
+      <div style={{fontSize:13,color:C.text,lineHeight:2}}>
+        <div><strong style={{color:C.white}}>Kullanıcı Adı:</strong> {bilgi.username}</div>
+        <div><strong style={{color:C.white}}>Şirket:</strong> {bilgi.companyName}</div>
+        <div><strong style={{color:C.white}}>Rol:</strong> {ROL_TANIMLARI[bilgi.role]?.label||bilgi.role}</div>
+        <div><strong style={{color:C.white}}>E-posta:</strong> {bilgi.email||'—'}</div>
+      </div>
+    </div>
+    <div style={S.card}>
+      <div style={S.secTitle}>🔑 Şifre {bilgi.googleOnly?'Belirle':'Değiştir'}</div>
+      {bilgi.googleOnly&&<InfoBox color={C.blue}>ℹ️ Bu hesap şu an yalnızca Google ile giriş yapabiliyor. Buradan bir şifre belirlerseniz, kullanıcı adı/şifre ile de giriş yapabilirsiniz.</InfoBox>}
+      <form onSubmit={sifreKaydet}>
+        {!bilgi.googleOnly&&<FG label="Mevcut Şifre"><input type="password" style={S.inp} value={mevcutSifre} onChange={e=>setMevcutSifre(e.target.value)} autoComplete="current-password"/></FG>}
+        <div style={S.g2}>
+          <FG label="Yeni Şifre"><input type="password" style={S.inp} value={yeniSifre} onChange={e=>setYeniSifre(e.target.value)} autoComplete="new-password" minLength={6}/></FG>
+          <FG label="Yeni Şifre (Tekrar)"><input type="password" style={S.inp} value={yeniSifreTekrar} onChange={e=>setYeniSifreTekrar(e.target.value)} autoComplete="new-password" minLength={6}/></FG>
+        </div>
+        {sifreHata&&<div style={{...S.alert(C.red),marginBottom:12}}>⚠️ {sifreHata}</div>}
+        <button type="submit" style={S.btn()} disabled={sifreIslemde||!yeniSifre}>{sifreIslemde?'⏳ Kaydediliyor...':'💾 Şifreyi Kaydet'}</button>
+      </form>
+    </div>
+    <div style={S.card}>
+      <div style={S.secTitle}>🔗 Google Hesabı</div>
+      {bilgi.googleLinked?(
+        <div>
+          <div style={{fontSize:13,color:C.green,marginBottom:12}}>✓ Bağlı: <strong>{bilgi.email}</strong></div>
+          {!bilgi.googleOnly?<button style={S.btnR} onClick={googleKaldir}>Bağlantıyı Kaldır</button>:<div style={{fontSize:11,color:C.muted}}>ℹ️ Bu hesabın şifresi olmadığından, önce yukarıdan bir şifre belirlemeden Google bağlantısı kaldırılamaz.</div>}
+        </div>
+      ):googleClientId?(
+        <div>
+          <div style={{fontSize:13,color:C.muted,marginBottom:12}}>Google hesabınızı bağlayarak, bundan sonra kullanıcı adı/şifreye ek olarak "Google ile Giriş Yap" ile de oturum açabilirsiniz.</div>
+          <div ref={googleBtnRef}/>
+          {googleIslemde&&<div style={{fontSize:12,color:C.muted,marginTop:8}}>⏳ Bağlanıyor...</div>}
+        </div>
+      ):(
+        <InfoBox color={C.yellow}>ℹ️ Bu sunucuda "Google ile Giriş" yapılandırılmamış.</InfoBox>
+      )}
+    </div>
+    <Sunucu2FAAyarlari/>
+  </div>);
+}
+
 function Sunucu2FAAyarlari(){
   const bagli=!!getSyncCfg().token;
   const [durum,setDurum]=useState(null);
@@ -4994,7 +5176,64 @@ function SenkronPaneli(){
   const [hata,setHata]=useState('');
   const [iki2FABekleniyor,setIki2FABekleniyor]=useState(null); // {url,username,tempToken}
   const [kod2FA,setKod2FA]=useState('');
+  const [googleClientId,setGoogleClientId]=useState(null);
+  const [googleKayitBekleyen,setGoogleKayitBekleyen]=useState(null); // {credential,email,name}
+  const [googleFirma,setGoogleFirma]=useState('');
+  const googleBtnRef=useRef(null);
   useEffect(()=>fpSyncSubscribe(setStatus),[]);
+
+  // Sunucu adresi değiştikçe Google giriş yapılandırmasını (varsa) yeniden çeker.
+  useEffect(()=>{
+    if(!url?.trim()){setGoogleClientId(null);return;}
+    let iptal=false;
+    fpGoogleConfig(url.trim().replace(/\/+$/,'')).then(d=>{if(!iptal)setGoogleClientId(d.available?d.clientId:null);}).catch(()=>{if(!iptal)setGoogleClientId(null);});
+    return()=>{iptal=true;};
+  },[url]);
+
+  const googleGeriDon=async(credential)=>{
+    setHata('');setIslemde(true);
+    try{
+      const temizUrl=url.trim().replace(/\/+$/,'');
+      const sonuc=await fpGoogleLogin(temizUrl,credential);
+      if(sonuc.requires2FA){setIki2FABekleniyor({url:temizUrl,username:null,tempToken:sonuc.tempToken});setIslemde(false);return;}
+      if(sonuc.accountFound===false){setGoogleKayitBekleyen({credential,email:sonuc.email,name:sonuc.name});setIslemde(false);return;}
+      fpToast('✅ Google ile giriş yapıldı, senkronizasyon başlatılıyor.');
+    }catch(err){
+      setHata(err.message||'Google girişi başarısız.');
+    }finally{
+      setIslemde(false);
+    }
+  };
+  // Google'ın buton bileşenini (kendi görünümüyle) ilgili div'e çizer.
+  useEffect(()=>{
+    if(!googleClientId||!googleBtnRef.current)return;
+    let deneme=0;
+    const dene=()=>{
+      if(window.google?.accounts?.id){
+        window.google.accounts.id.initialize({client_id:googleClientId,callback:(resp)=>googleGeriDon(resp.credential)});
+        window.google.accounts.id.renderButton(googleBtnRef.current,{theme:'outline',size:'large',width:320,text:'continue_with'});
+      }else if(deneme<25){
+        deneme++;setTimeout(dene,200);
+      }
+    };
+    dene();
+    // eslint-disable-next-line
+  },[googleClientId,url]);
+
+  const googleKayitTamamla=async(e)=>{
+    e.preventDefault();
+    setHata('');setIslemde(true);
+    try{
+      const temizUrl=url.trim().replace(/\/+$/,'');
+      await fpGoogleRegister(temizUrl,googleKayitBekleyen.credential,googleFirma);
+      fpToast('✅ Şirket kaydı Google ile oluşturuldu.');
+      setGoogleKayitBekleyen(null);setGoogleFirma('');
+    }catch(err){
+      setHata(err.message||'Kayıt başarısız.');
+    }finally{
+      setIslemde(false);
+    }
+  };
 
   const gonder=async(e)=>{
     e.preventDefault();
@@ -5054,21 +5293,39 @@ function SenkronPaneli(){
                 <button type="submit" style={{...S.btn(),flex:1}} disabled={islemde||kod2FA.length!==6}>{islemde?'⏳ Doğrulanıyor...':'✓ Doğrula ve Bağlan'}</button>
               </div>
             </form>
+          ):googleKayitBekleyen?(
+            <form onSubmit={googleKayitTamamla}>
+              <InfoBox color={C.blue}>👤 <strong>{googleKayitBekleyen.email}</strong> ile eşleşen bir FiloPro hesabı bulunamadı. Bu Google hesabıyla yeni bir şirket oluşturmak için şirket adını girin (bu hesap şifresiz, yalnızca Google ile giriş yapar — isterseniz sonradan Ayarlar &gt; Hesabım'dan bir şifre de ekleyebilirsiniz).</InfoBox>
+              <FG label="Şirket Adı"><input style={S.inp} value={googleFirma} onChange={e=>setGoogleFirma(e.target.value)} autoFocus required/></FG>
+              {hata&&<div style={{...S.alert(C.red),marginBottom:12}}>⚠️ {hata}</div>}
+              <div style={{display:'flex',gap:10}}>
+                <button type="button" style={S.btnO} onClick={()=>{setGoogleKayitBekleyen(null);setGoogleFirma('');setHata('');}}>İptal</button>
+                <button type="submit" style={{...S.btn(),flex:1}} disabled={islemde||!googleFirma.trim()}>{islemde?'⏳ Oluşturuluyor...':'🏢 Şirketi Google ile Oluştur'}</button>
+              </div>
+            </form>
           ):(
           <div>
             <div style={{display:'flex',gap:8,marginBottom:16}}>
               <button onClick={()=>setMod('giris')} style={{...S.btn(mod==='giris'?C.accent:C.muted),flex:1}}>Giriş Yap</button>
               <button onClick={()=>setMod('kayit')} style={{...S.btn(mod==='kayit'?C.accent:C.muted),flex:1}}>Şirket Kaydı Oluştur</button>
             </div>
+            <FG label="Sunucu Adresi"><input style={S.inp} placeholder="https://filopro-sync.ornekdomain.com" value={url} onChange={e=>setUrl(e.target.value)}/></FG>
+            {url.trim()&&(googleClientId?(
+              <div style={{marginBottom:16}}>
+                <div ref={googleBtnRef}/>
+                <div style={{display:'flex',alignItems:'center',gap:10,margin:'14px 0',color:C.muted,fontSize:12}}><div style={{flex:1,height:1,background:C.border}}/>veya kullanıcı adı/şifre ile{mod==='kayit'?' kaydolun':' giriş yapın'}<div style={{flex:1,height:1,background:C.border}}/></div>
+              </div>
+            ):(
+              <div style={{fontSize:11,color:C.muted,marginBottom:14}}>ℹ️ Bu sunucuda "Google ile Giriş" yapılandırılmamış — kullanıcı adı/şifre ile devam edin.</div>
+            ))}
             <form onSubmit={gonder}>
-              <FG label="Sunucu Adresi"><input style={S.inp} placeholder="https://filopro-sync.ornekdomain.com" value={url} onChange={e=>setUrl(e.target.value)} required/></FG>
               {mod==='kayit'&&<FG label="Şirket Adı"><input style={S.inp} value={firma} onChange={e=>setFirma(e.target.value)} required/></FG>}
               <div style={S.g2}>
                 <FG label="Kullanıcı Adı"><input style={S.inp} value={kadi} onChange={e=>setKadi(e.target.value)} autoCapitalize="off" autoCorrect="off" autoComplete="username" spellCheck="false" required/></FG>
                 <FG label="Şifre"><input type="password" style={S.inp} value={sifre} onChange={e=>setSifre(e.target.value)} autoCapitalize="off" autoCorrect="off" autoComplete={mod==='kayit'?'new-password':'current-password'} spellCheck="false" required minLength={6}/></FG>
               </div>
               {hata&&<div style={{...S.alert(C.red),marginBottom:12}}>⚠️ {hata}</div>}
-              <button type="submit" style={S.btn()} disabled={islemde}>{islemde?'⏳ İşleniyor...':mod==='kayit'?'🏢 Şirketi Kaydet':'🔗 Bağlan'}</button>
+              <button type="submit" style={S.btn()} disabled={islemde||!url.trim()}>{islemde?'⏳ İşleniyor...':mod==='kayit'?'🏢 Şirketi Kaydet':'🔗 Bağlan'}</button>
               {mod==='kayit'&&<div style={{fontSize:12,color:C.muted,marginTop:10}}>Bu, yeni ve boş bir şirket veri alanı oluşturur; girdiğiniz kullanıcı otomatik olarak yönetici olur. Daha sonra ekip üyelerinizi ekleyebilirsiniz.</div>}
             </form>
           </div>
@@ -5262,7 +5519,7 @@ function Ayarlar(){
   };
 
   return(<div>
-    <TabBar tabs={[['genel','⚙️ Genel'],['firma','🏢 Firma'],['kategoriler','🏷️ Kategoriler & Tipler'],['moduller','🧩 Modüller'],['bildirimler','🔔 Bildirimler'],['gorunum','🎨 Görünüm'],['guvenlik','🔐 Güvenlik'],['yetki','👥 Kullanıcı & Yetki'],['erp','🏢 ERP Entegrasyon'],['senkron','☁️ Senkronizasyon'],['veri','💾 Veri Yönetimi'],['hakkinda','ℹ️ Hakkında']]} active={tab} onChange={setTab}/>
+    <TabBar tabs={[['genel','⚙️ Genel'],['firma','🏢 Firma'],['kategoriler','🏷️ Kategoriler & Tipler'],['moduller','🧩 Modüller'],['bildirimler','🔔 Bildirimler'],['gorunum','🎨 Görünüm'],['hesabim','👤 Hesabım'],['guvenlik','🔐 Güvenlik'],['yetki','👥 Kullanıcı & Yetki'],['erp','🏢 ERP Entegrasyon'],['senkron','☁️ Senkronizasyon'],['veri','💾 Veri Yönetimi'],['hakkinda','ℹ️ Hakkında']]} active={tab} onChange={setTab}/>
 
     {tab==='genel'&&(<div style={S.card}>
       <div style={S.secTitle}>⚙️ Genel Tercihler</div>
@@ -5320,6 +5577,21 @@ function Ayarlar(){
 
     {tab==='firma'&&(<div style={S.card}>
       <div style={S.secTitle}>🏢 Firma Bilgileri</div>
+      <FG label="Firma Logosu">
+        <div style={{display:'flex',alignItems:'center',gap:14,marginBottom:8}}>
+          {s.firmaLogo&&<img src={s.firmaLogo} alt="Firma logosu" style={{width:64,height:64,objectFit:'contain',background:'#fff',borderRadius:8,border:`1px solid ${C.border}`,padding:4}}/>}
+          <div style={{flex:1}}>
+            <input type="file" accept="image/*" style={S.inp} onChange={async e=>{
+              const dosya=e.target.files?.[0];e.target.value='';
+              if(!dosya)return;
+              try{const veri=await resimSikistir(dosya,400,0.85);upd('firmaLogo',veri);}
+              catch(err){fpToast(err.message||'Logo yüklenemedi.','error');}
+            }}/>
+            {s.firmaLogo&&<button type="button" style={{...S.btnR,marginTop:8,fontSize:11}} onClick={()=>upd('firmaLogo',null)}>🗑 Logoyu Kaldır</button>}
+          </div>
+        </div>
+        <div style={{fontSize:11,color:C.muted}}>ℹ️ Logo; kenar çubuğunda, giriş ekranında, fatura ve PDF raporlarında görünür. Otomatik küçültülür.</div>
+      </FG>
       <FG label="Firma Adı"><input style={S.inp} value={s.firmaAdi} onChange={e=>upd('firmaAdi',e.target.value)}/></FG>
       <FG label="Adres"><input style={S.inp} value={s.firmaAdres} onChange={e=>upd('firmaAdres',e.target.value)}/></FG>
       <div style={S.g2}>
@@ -5472,6 +5744,8 @@ function Ayarlar(){
       <div style={{display:'flex',gap:10,alignItems:'center'}}><button style={S.btn()} onClick={kaydet}>💾 Kaydet</button>{saved&&<span style={{color:C.green,fontSize:12}}>✓ Kaydedildi</span>}</div>
     </div>)}
 
+    {tab==='hesabim'&&<HesabimSekmesi/>}
+
     {tab==='guvenlik'&&(<div>
       <div style={S.card}>
         <div style={S.secTitle}>🔐 Giriş Koruması</div>
@@ -5512,7 +5786,11 @@ function Ayarlar(){
         </FG>
         <button style={S.btnO} onClick={simdiKilitle}>🔒 Uygulamayı Şimdi Kilitle</button>
       </div>)}
-      <Sunucu2FAAyarlari/>
+      <div style={S.card}>
+        <div style={S.secTitle}>👤 Hesap Güvenliği (2FA, Şifre, Google)</div>
+        <div style={{fontSize:13,color:C.muted,marginBottom:12}}>İki faktörlü doğrulama, şifre değiştirme ve Google hesabı bağlama artık "Hesabım" sekmesinde.</div>
+        <button style={S.btnO} onClick={()=>setTab('hesabim')}>👤 Hesabım Sekmesine Git</button>
+      </div>
       <div style={S.card}>
         <div style={S.secTitle}>👥 Kullanıcılar ve Roller</div>
         <div style={{fontSize:13,color:C.muted,marginBottom:12}}>Kullanıcı ekleme, rol atama ve işlem logları için Kullanıcı & Yetki modülünü kullanın.</div>
@@ -5605,7 +5883,7 @@ function LockScreen({onUnlock}){
   return(<div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:`radial-gradient(circle at 30% 20%,${C.card},${C.bg})`,padding:20}}>
     <form onSubmit={dene} style={{width:'min(380px,92vw)',background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:'32px 28px',boxShadow:'0 20px 60px -20px rgba(0,0,0,.6)'}} className="fp-fade">
       <div style={{textAlign:'center',marginBottom:22}}>
-        <div style={{fontSize:40,marginBottom:8}}>🚜</div>
+        {s.firmaLogo?<img src={s.firmaLogo} alt="Logo" style={{width:56,height:56,objectFit:'contain',background:'#fff',borderRadius:10,padding:4,marginBottom:8}}/>:<div style={{fontSize:40,marginBottom:8}}>🚜</div>}
         <div style={{fontSize:20,fontWeight:800,color:C.white}}>{s.firmaAdi||'FiloPro'}</div>
         <div style={{fontSize:12,color:C.muted,marginTop:4}}>Devam etmek için şifrenizi girin</div>
       </div>
@@ -6903,7 +7181,11 @@ function App(){
       <div id="fp-overlay" onClick={()=>setMenuOpen(false)}/>
       <aside id="fp-sidebar" style={{...S.sidebar,width:sidebarKompakt?70:240}}>
         <div style={S.logo}>
-          <div style={S.logoText}>{sidebarKompakt?'🚜':'🚜 FiloPro'}</div>
+          {getSettings().firmaLogo?(
+            <div style={{display:'flex',alignItems:'center',gap:8}}><img src={getSettings().firmaLogo} alt="Logo" style={{width:sidebarKompakt?30:32,height:sidebarKompakt?30:32,objectFit:'contain',borderRadius:6,background:'#fff',padding:2}}/>{!sidebarKompakt&&<div style={S.logoText}>{getSettings().firmaAdi||'FiloPro'}</div>}</div>
+          ):(
+            <div style={S.logoText}>{sidebarKompakt?'🚜':'🚜 FiloPro'}</div>
+          )}
           {!sidebarKompakt&&<div style={S.logoSub}>İş Makinesi Yönetim Sistemi</div>}
         </div>
         <nav style={{flex:1,paddingBottom:16}}>
