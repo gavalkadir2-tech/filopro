@@ -846,8 +846,9 @@ async function runDailyPushDigest() {
 // sunucudaki ortak GROQ_API_KEY (varsa) yedek olarak kullanılır.
 const GLOBAL_AI_DAILY_LIMIT = parseInt(process.env.AI_DAILY_LIMIT || '200', 10);
 const AI_MODELS = [
-  { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B — en yetenekli (önerilen)' },
-  { id: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B — en hızlı, daha yüksek kotayla' },
+  { id: 'openai/gpt-oss-120b', label: 'GPT-OSS 120B — en yetenekli (önerilen)' },
+  { id: 'openai/gpt-oss-20b', label: 'GPT-OSS 20B — en hızlı, daha yüksek kotayla' },
+  { id: 'qwen/qwen3.6-27b', label: 'Qwen 3.6 27B — metin + resim (fiş/fatura okuma için)' },
 ];
 const DEFAULT_AI_MODEL = AI_MODELS[0].id;
 
@@ -866,11 +867,14 @@ function getAiUsage(tenantId) {
 }
 function effectiveAiConfig(tenantId) {
   const cfg = readAiConfig(tenantId);
+  // Daha önce seçilip kaydedilmiş model artık kullanımdan kaldırılmış (deprecated) olabilir;
+  // böyle bir durumda sessizce güncel varsayılana döner (hata vermek yerine).
+  const kayitliModelGecerli = cfg.model && AI_MODELS.some((m) => m.id === cfg.model);
   return {
     apiKey: cfg.groqApiKey || GROQ_API_KEY || '',
     usingOwnKey: !!cfg.groqApiKey,
     usingServerDefault: !cfg.groqApiKey && !!GROQ_API_KEY,
-    model: cfg.model || DEFAULT_AI_MODEL,
+    model: kayitliModelGecerli ? cfg.model : DEFAULT_AI_MODEL,
     dailyLimit: cfg.dailyLimit || GLOBAL_AI_DAILY_LIMIT,
   };
 }
@@ -959,6 +963,55 @@ app.post('/api/ai/chat', authMiddleware, aiRateLimit, async (req, res) => {
     res.json({ text });
   } catch (e) {
     res.status(502).json({ error: 'Yapay zeka servisine ulaşılamadı: ' + e.message });
+  }
+});
+
+// Fiş/fatura FOTOĞRAFINDAN veri okur (görü/vision). Şirketin normal sohbet modeli ne
+// olursa olsun, burada HER ZAMAN görü destekli bir model kullanılır — Groq'ta metin
+// modelleri resim kabul etmez. qwen/qwen3.6-27b şu an Groq'ta "önizleme" (preview)
+// statüsündedir; üretim garantisi yoktur, ara sıra hatalı/eksik okuma olabilir, bu
+// yüzden istemci tarafında kullanıcı onayından geçmeden hiçbir veri kaydedilmez.
+const VISION_MODEL = 'qwen/qwen3.6-27b';
+app.post('/api/ai/vision', authMiddleware, aiRateLimit, async (req, res) => {
+  const eff = effectiveAiConfig(req.user.tenantId);
+  if (!eff.apiKey) {
+    return res.status(503).json({ error: 'Yapay zeka anahtarı yapılandırılmamış. Ayarlar → Senkronizasyon → Yapay Zeka bölümünden bir Groq API anahtarı girin (ücretsiz: console.groq.com).' });
+  }
+  const { imageDataUrl, prompt } = req.body || {};
+  if (!imageDataUrl || typeof imageDataUrl !== 'string' || !imageDataUrl.startsWith('data:image/')) {
+    return res.status(400).json({ error: 'Geçerli bir resim (data URL) gerekli.' });
+  }
+  if (!prompt || typeof prompt !== 'string') {
+    return res.status(400).json({ error: 'prompt (metin) gerekli.' });
+  }
+  try {
+    const upstream = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${eff.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: VISION_MODEL,
+        max_tokens: 800,
+        response_format: { type: 'json_object' },
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: imageDataUrl } },
+          ],
+        }],
+      }),
+    });
+    const data = await upstream.json();
+    if (!upstream.ok) {
+      return res.status(upstream.status).json({ error: data?.error?.message || 'Yapay zeka görü servisi hata döndürdü.' });
+    }
+    const text = data.choices?.[0]?.message?.content || '{}';
+    res.json({ text });
+  } catch (e) {
+    res.status(502).json({ error: 'Yapay zeka görü servisine ulaşılamadı: ' + e.message });
   }
 });
 

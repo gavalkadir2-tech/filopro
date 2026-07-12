@@ -55,9 +55,19 @@ Deploy sonrası size bir URL verilir (ör. `https://filopro-sync-xxxx.onrender.c
 
 ## Yapay Zeka Asistanı (opsiyonel, ücretsiz)
 
-FiloPro'nun AI Asistan modülü (sohbet, arıza tahmini, maliyet projeksiyonu)
-**Groq**'u kullanır — hızlı, açık modelleri (Llama 3.3 70B / 3.1 8B) kredi
-kartı gerektirmeden, ücretsiz bir kotayla sunan bir sağlayıcı.
+FiloPro'nun AI Asistan modülü (sohbet, arıza tahmini, maliyet projeksiyonu,
+fiş/fatura fotoğrafı okuma) **Groq**'u kullanır — hızlı, açık modelleri
+kredi kartı gerektirmeden, ücretsiz bir kotayla sunan bir sağlayıcı.
+
+**⚠️ 12 Temmuz 2026 güncellemesi:** Daha önce kullanılan `llama-3.3-70b-versatile`
+ve `llama-3.1-8b-instant` modelleri Groq tarafından **17 Haziran 2026'da
+kullanımdan kaldırıldı (deprecated)**. Sunucu artık varsayılan olarak
+`openai/gpt-oss-120b` / `openai/gpt-oss-20b` kullanıyor. Modeller zamanla
+değişebildiği için, ileride benzer bir sorun yaşarsanız güncel liste için
+[console.groq.com/docs/models](https://console.groq.com/docs/models) adresine
+bakın. Daha önce Ayarlar'dan elle bir model seçtiyseniz ve o model artık
+kaldırıldıysa, sunucu bunu otomatik olarak fark edip güncel varsayılana
+döner (hata vermez).
 
 **Artık API anahtarını `.env` dosyasına yazmanıza gerek yok** — FiloPro
 uygulamasının içinden, **Ayarlar → ☁️ Senkronizasyon → 🤖 Yapay Zeka
@@ -80,6 +90,20 @@ başlangıç kotası sağlamak için kullanışlıdır).
 
 Hiçbir anahtar tanımlı değilse sadece AI modülü çalışmaz, senkronizasyon ve
 diğer tüm özellikler normal şekilde çalışmaya devam eder.
+
+### Fiş/Fatura Fotoğrafından Otomatik Veri Okuma (görü/vision)
+
+Yakıt Yönetimi'nde "📷 Fişi Fotoğrafla / Tara" ile bir yakıt fişinin
+fotoğrafını çekip, tutar/tarih/istasyon bilgilerinin otomatik okunmasını
+sağlayabilirsiniz. Bu özellik, metin sohbetinden **farklı ve ayrı** bir
+model kullanır (`qwen/qwen3.6-27b`) çünkü Groq'taki metin modelleri resim
+kabul etmez.
+
+**⚠️ Bu özellik deneyseldir:** `qwen/qwen3.6-27b`, bu yazı itibarıyla
+Groq'ta "önizleme" (preview) statüsündedir — üretim ortamı için garanti
+verilmez ve okuma bazen eksik/hatalı olabilir. Bu yüzden okunan veri
+**hiçbir zaman otomatik kaydedilmez**; her zaman forma önceden doldurulmuş
+hâlde gelir ve siz kontrol edip "Kaydet"e basmadan hiçbir şey işlenmez.
 
 ## Günlük Otomatik Yedek E-postası (opsiyonel)
 
