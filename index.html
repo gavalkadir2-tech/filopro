@@ -354,6 +354,10 @@ LS.set=(k,v)=>{
     fpToast('🔒 Salt okunur modda değişiklik yapamazsınız.','error');
     return;
   }
+  if(kilitliKayitIhlaliVarMi(k,v)){
+    fpToast('🔒 Bu kayıt, muhasebe kilit tarihinden önceki bir döneme ait — değiştirilemez/silinemez. Ayarlar > Genel\'den kilit tarihini değiştirebilirsiniz.','error');
+    return;
+  }
   const cfg=getSyncCfg();
   if(!cfg.token){
     _origLSSet(k,v);
@@ -910,6 +914,8 @@ const DEFAULT_SETTINGS={
   sahaServisTipleri:[{id:'kurtarici',icon:'🚨',label:'Kurtarıcı'},{id:'vinc',icon:'🏗️',label:'Vinç'},{id:'vidanjor',icon:'🚛',label:'Vidanjör'},{id:'nakliye',icon:'🚚',label:'Nakliye'},{id:'forklift',icon:'🏭',label:'Forklift'},{id:'menlift',icon:'🪜',label:'Menlift'}],
   // ── Fatura Numaralandırma & Vade ───────────────────────────────────────────
   faturaKesilenOnEk:'F', faturaAlinanOnEk:'AF', faturaBaslangicSayaci:1, faturaVadeGunuVarsayilan:30,
+  vergiOranlari:[{id:'v20',ad:'KDV %20',oran:20},{id:'v10',ad:'KDV %10',oran:10},{id:'v1',ad:'KDV %1',oran:1},{id:'v0',ad:'KDV %0 (İstisna)',oran:0}],
+  muhasebeKilitTarihi:'', mesajImza:'',
   // ── Bakım Hatırlatması: Çalışma Saati / Km Bazlı Eşik (gün bazlı eşiklere ek) ──
   bakimSaatUyariEsigi:50, bakimKmUyariEsigi:500,
   // ── Modül Görünürlüğü (kenar çubuğunda hangi modüller gösterilsin) ────────
@@ -1237,17 +1243,19 @@ const tedarikciAd=(id)=>cariById(id)?.ad||'—';
 const hesapAd=(id)=>LS.get('hesaplar').find(h=>h.id===id)?.ad||'—';
 const cariAd=(f)=>f.tur==='kesilen'?musteriAd(f.musteriId):tedarikciAd(f.tedarikciId);
 const cariTel=(id)=>cariById(id)?.tel||'';
+// Ayarlar'da tanımlıysa, tüm WhatsApp mesajlarının sonuna aynı imzayı ekler.
+const mesajImzaEkle=(metin)=>{const imza=getSettings().mesajImza?.trim();return imza?`${metin}\n\n${imza}`:metin;};
 const faturaWaLink=(f,hareketler)=>{
   const tel=cariTel(f.tur==='kesilen'?f.musteriId:f.tedarikciId);
   if(!tel)return null;
   const kalan=faturaKalan(f,hareketler);
-  const mesaj=`🧾 Fatura Bildirimi\nFatura No: ${f.no}\nTarih: ${fmtDate(f.tarih)}\nVade: ${fmtDate(f.vadeTarih)}\nTutar: ${fmtTL(f.toplam)}${kalan>0&&kalan<f.toplam?`\nKalan: ${fmtTL(kalan)}`:''}${f.aciklama?`\nAçıklama: ${f.aciklama}`:''}${kalan<=0?'\n✅ Ödendi, teşekkür ederiz.':''}`;
+  const mesaj=mesajImzaEkle(`🧾 Fatura Bildirimi\nFatura No: ${f.no}\nTarih: ${fmtDate(f.tarih)}\nVade: ${fmtDate(f.vadeTarih)}\nTutar: ${fmtTL(f.toplam)}${kalan>0&&kalan<f.toplam?`\nKalan: ${fmtTL(kalan)}`:''}${f.aciklama?`\nAçıklama: ${f.aciklama}`:''}${kalan<=0?'\n✅ Ödendi, teşekkür ederiz.':''}`);
   return whatsappLinkOlustur(tel,mesaj);
 };
 const hareketWaLink=(h)=>{
   const tel=cariTel(h.kategori==='tahsilat'?h.musteriId:h.tedarikciId);
   if(!tel)return null;
-  const mesaj=`${h.kategori==='tahsilat'?'💵 Tahsilat Bildirimi':'💸 Ödeme Bildirimi'}\nBelge No: ${h.belgeNo}\nTarih: ${fmtDate(h.tarih)}\nTutar: ${fmtTL(h.tutar)}\nYöntem: ${h.yontem||'—'}${h.aciklama?`\nAçıklama: ${h.aciklama}`:''}\nTeşekkür ederiz.`;
+  const mesaj=mesajImzaEkle(`${h.kategori==='tahsilat'?'💵 Tahsilat Bildirimi':'💸 Ödeme Bildirimi'}\nBelge No: ${h.belgeNo}\nTarih: ${fmtDate(h.tarih)}\nTutar: ${fmtTL(h.tutar)}\nYöntem: ${h.yontem||'—'}${h.aciklama?`\nAçıklama: ${h.aciklama}`:''}\nTeşekkür ederiz.`);
   return whatsappLinkOlustur(tel,mesaj);
 };
 const faturaOdenen=(faturaId,hareketler)=>(hareketler||LS.get('kasaHareketleri')).filter(h=>h.faturaId===faturaId).reduce((s,h)=>s+(+h.tutar||0),0);
@@ -1897,10 +1905,14 @@ function TutarKdvAlani({form,setForm,tutarLabel='Tutar (₺, KDV hariç)'}){
   const tutar=+form.tutar||0;
   const kdvTutari=Math.round(tutar*oran)/100;
   const toplam=tutar+kdvTutari;
+  const oranSec=(o)=>setForm(f=>({...f,kdvOran:o,kdv:Math.round(tutar*o)/100}));
   return (<>
     <div style={S.g2}>
       <FG label={tutarLabel}><input type="number" style={S.inp} value={form.tutar??''} onChange={e=>{const t=+e.target.value;setForm(f=>({...f,tutar:t,kdvOran:oran,kdv:Math.round(t*oran)/100}));}}/></FG>
       <FG label="KDV Oranı (%)"><input type="number" style={S.inp} value={form.kdvOran??oran} onChange={e=>{const o=+e.target.value;setForm(f=>({...f,kdvOran:o,kdv:Math.round(tutar*o)/100}));}}/></FG>
+    </div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:-8,marginBottom:12}}>
+      {(getSettings().vergiOranlari||[]).map(v=>(<button key={v.id} type="button" style={{...S.btnO,fontSize:11,padding:'4px 9px',...(oran===v.oran?{borderColor:C.accent,color:C.accent}:{})}} onClick={()=>oranSec(v.oran)}>{v.ad}</button>))}
     </div>
     <div style={S.alert(C.accent)}>KDV Tutarı: <strong>{fmtTL(kdvTutari)}</strong> &nbsp;|&nbsp; Toplam: <strong>{fmtTL(toplam)}</strong></div>
   </>);
@@ -3273,7 +3285,7 @@ function IsEmirleri(){
       i.bitis?`Bitiş: ${fmtDate(i.bitis)}`:null,
       i.aciklama?`Açıklama: ${i.aciklama}`:null,
     ].filter(Boolean);
-    return satirlar.join('\n');
+    return mesajImzaEkle(satirlar.join('\n'));
   };
   const isEmriWaLink=(i)=>{const per=personel.find(p=>p.id===i.opId);return per?.tel?whatsappLinkOlustur(per.tel,isEmriMesaji(i)):null;};
   const otoBaslik=(f)=>{
@@ -3444,7 +3456,7 @@ function Gorevler(){
   const durumLabel={acik:'Açık',devamediyor:'Devam Ediyor',tamamlandi:'Tamamlandı'};
   const gec=(g)=>g.durum!=='tamamlandi'&&g.bitis&&daysLeft(g.bitis)<0;
   const sorumluAd=(g)=>personel.find(p=>p.id===g.personelId)?.ad||g.sorumlu||'';
-  const gorevMesaji=(g)=>`📋 Görev: ${g.baslik}\n${g.aciklama?`Açıklama: ${g.aciklama}\n`:''}Öncelik: ${oncLabel[g.oncelik]||g.oncelik}\n${g.bitis?`Bitiş: ${fmtDate(g.bitis)}`:''}`;
+  const gorevMesaji=(g)=>mesajImzaEkle(`📋 Görev: ${g.baslik}\n${g.aciklama?`Açıklama: ${g.aciklama}\n`:''}Öncelik: ${oncLabel[g.oncelik]||g.oncelik}\n${g.bitis?`Bitiş: ${fmtDate(g.bitis)}`:''}`);
   const waLink=(g)=>{const per=personel.find(p=>p.id===g.personelId);return per?.tel?whatsappLinkOlustur(per.tel,gorevMesaji(g)):null;};
   const disaAktarSatirlar=gorevler.map(g=>[g.baslik,sorumluAd(g),oncLabel[g.oncelik]||g.oncelik,durumLabel[g.durum]||g.durum,fmtDate(g.bitis),g.aciklama||'']);
   return(<div>
@@ -5651,6 +5663,13 @@ function Ayarlar(){
   const giderKatEkle=()=>{const v=yeniGiderKat.trim();if(!v)return;if((s.giderKategorileri||[]).includes(v)){setYeniGiderKat('');return;}upd('giderKategorileri',[...(s.giderKategorileri||[]),v]);setYeniGiderKat('');};
   const gelirKatSil=(k)=>upd('gelirKategorileri',(s.gelirKategorileri||[]).filter(x=>x!==k));
   const giderKatSil=(k)=>upd('giderKategorileri',(s.giderKategorileri||[]).filter(x=>x!==k));
+  const [yeniVergiAd,setYeniVergiAd]=useState(''),[yeniVergiOran,setYeniVergiOran]=useState('');
+  const vergiEkle=()=>{
+    const ad=yeniVergiAd.trim();if(!ad||yeniVergiOran==='')return;
+    upd('vergiOranlari',[...(s.vergiOranlari||[]),{id:uid(),ad,oran:+yeniVergiOran}]);
+    setYeniVergiAd('');setYeniVergiOran('');
+  };
+  const vergiSil=(id)=>upd('vergiOranlari',(s.vergiOranlari||[]).filter(v=>v.id!==id));
   const modulToggle=(id)=>upd('modulDurumu',{...s.modulDurumu,[id]:s.modulDurumu?.[id]===false?true:false});
   const [yeniServisIkon,setYeniServisIkon]=useState('🔧');
   const [yeniServisEtiket,setYeniServisEtiket]=useState('');
@@ -5794,6 +5813,14 @@ function Ayarlar(){
       </div>
       <InfoBox color={C.blue}>ℹ️ Yeni fatura numarası otomatik olarak <code>{`${s.faturaKesilenOnEk||'F'}-${today().slice(0,7)}-${String(s.faturaBaslangicSayaci||1).padStart(3,'0')}`}</code> biçiminde üretilir (ön ek-yıl/ay-sayaç). Vade tarihi, fatura tarihine yukarıdaki gün sayısı eklenerek otomatik doldurulur; dilerseniz fatura eklerken elle değiştirebilirsiniz.</InfoBox>
 
+      <div style={{...S.secTitle,marginTop:22}}>🔒 Muhasebe Dönem Kilitleme</div>
+      <FG label="Kilit Tarihi (bu tarih ve öncesi kilitlenir)"><input type="date" style={{...S.inp,maxWidth:220}} value={s.muhasebeKilitTarihi||''} onChange={e=>upd('muhasebeKilitTarihi',e.target.value)}/></FG>
+      <InfoBox color={C.yellow}>⚠️ Kilit tarihi belirlerseniz, bu tarihe (dahil) kadar olan Gelir/Gider, Fatura, Kasa/Banka Hareketi ve Çek/Senet kayıtları <strong>eklenemez, düzenlenemez ve silinemez</strong> — kapanmış bir dönemin (ör. beyanname verilmiş bir ay) yanlışlıkla bozulmasını önler. Boş bırakılırsa kilit uygulanmaz. Bir kaydı düzeltmeniz gerekirse önce bu tarihi geriye alıp işlem sonrası tekrar ileri almanız gerekir.</InfoBox>
+
+      <div style={{...S.secTitle,marginTop:22}}>💬 Mesaj İmzası</div>
+      <FG label="WhatsApp Mesajlarına Eklenecek İmza (opsiyonel)"><input style={S.inp} placeholder="Örn: İyi çalışmalar, ABC Filo Hizmetleri" value={s.mesajImza||''} onChange={e=>upd('mesajImza',e.target.value)}/></FG>
+      <InfoBox color={C.blue}>ℹ️ Fatura, İş Emri ve Görev WhatsApp mesajlarının sonuna otomatik olarak eklenir.</InfoBox>
+
       <div style={{...S.secTitle,marginTop:22}}>⏱️ Mesai & Bordro Parametreleri</div>
       <div style={S.g3}>
         <FG label="Günlük Normal Mesai Eşiği (saat)"><input type="number" step="0.5" style={S.inp} value={s.normalMesaiSaat} onChange={e=>upd('normalMesaiSaat',+e.target.value)}/></FG>
@@ -5873,6 +5900,18 @@ function Ayarlar(){
           <input style={{...S.inp,maxWidth:70,textAlign:'center'}} value={yeniServisIkon} onChange={e=>setYeniServisIkon(e.target.value)} placeholder="🔧"/>
           <input style={S.inp} placeholder="Yeni servis tipi adı… (örn. Çekici)" value={yeniServisEtiket} onChange={e=>setYeniServisEtiket(e.target.value)} onKeyDown={e=>e.key==='Enter'&&servisTipEkle()}/>
           <button style={S.btnAdd} onClick={servisTipEkle}>＋</button>
+        </div>
+      </div>
+      <div style={S.card}>
+        <div style={S.secTitle}>🧮 Vergi Oranları</div>
+        <div style={{color:C.muted,fontSize:13,marginBottom:14}}>Fatura ve Gelir/Gider kayıtlarında hızlı seçim için kullanılır (örn. farklı KDV dilimleri veya stopaj). "Varsayılan KDV Oranı" (Genel sekmesi) hâlâ ilk açılışta öntanımlı gelir.</div>
+        <table style={S.tbl}><thead><tr><th style={S.th}>Ad</th><th style={S.th}>Oran (%)</th><th style={S.th}></th></tr></thead>
+        <tbody>{(s.vergiOranlari||[]).map(v=>(<tr key={v.id}><td style={S.td}>{v.ad}</td><td style={S.td}>%{v.oran}</td><td style={S.td}><button style={S.btnR} onClick={()=>vergiSil(v.id)}>🗑</button></td></tr>))}
+        {(s.vergiOranlari||[]).length===0&&<tr><td style={S.td} colSpan={3}><div style={{textAlign:'center',color:C.muted,padding:12}}>Henüz vergi oranı yok.</div></td></tr>}</tbody></table>
+        <div style={{...S.selRow,marginTop:10}}>
+          <input style={S.inp} placeholder="Ad (örn. KDV %8)" value={yeniVergiAd} onChange={e=>setYeniVergiAd(e.target.value)}/>
+          <input type="number" style={{...S.inp,maxWidth:100}} placeholder="Oran" value={yeniVergiOran} onChange={e=>setYeniVergiOran(e.target.value)} onKeyDown={e=>e.key==='Enter'&&vergiEkle()}/>
+          <button style={S.btnAdd} onClick={vergiEkle}>＋</button>
         </div>
       </div>
       <InfoBox color={C.blue}>ℹ️ Bu listeler Muhasebe → Gelir/Gider ve İş Emirleri modüllerindeki kategori/tür seçim menülerinde kullanılır. En az bir kayıt bırakın; boş bırakılırsa varsayılan liste kullanılır.</InfoBox>
@@ -7272,6 +7311,33 @@ const aktifKullaniciSaltOkunurMu=()=>{
     return aktif?.rol==='saltokunur';
   }catch{return false;}
 };
+
+// ── Muhasebe Dönem Kilitleme ─────────────────────────────────────────────────
+// Gerçek muhasebe yazılımlarındaki "books closing date" gibi: bu tarihten önceki
+// mali kayıtlar eklenemez/düzenlenemez/silinemez — kapanmış bir dönemin yanlışlıkla
+// bozulmasını önler. Sadece Ayarlar'dan kilit tarihini değiştirerek/kaldırarak aşılabilir.
+const MUHASEBE_KILIT_ANAHTARLARI=['gelirGider','faturalar','kasaHareketleri','cekSenetler'];
+function kilitliKayitIhlaliVarMi(k,yeniListe){
+  if(!MUHASEBE_KILIT_ANAHTARLARI.includes(k))return false;
+  const kilit=getSettings().muhasebeKilitTarihi;
+  if(!kilit)return false;
+  const eskiListe=(()=>{try{return JSON.parse(localStorage.getItem(k)||'[]');}catch{return[];}})();
+  const eskiMap={};(eskiListe||[]).forEach(r=>{if(r&&r.id!=null)eskiMap[r.id]=r;});
+  const yeniMap={};(yeniListe||[]).forEach(r=>{if(r&&r.id!=null)yeniMap[r.id]=r;});
+  const kilitliMi=(r)=>r?.tarih&&r.tarih<=kilit;
+  // Silinen veya değiştirilen, kilitli döneme ait eski kayıt var mı?
+  for(const id in eskiMap){
+    const eski=eskiMap[id];
+    if(!kilitliMi(eski))continue;
+    const yeni=yeniMap[id];
+    if(!yeni||JSON.stringify(yeni)!==JSON.stringify(eski))return true;
+  }
+  // Kilitli döneme ait YENİ (geriye dönük) bir kayıt ekleniyor mu?
+  for(const id in yeniMap){
+    if(!(id in eskiMap)&&kilitliMi(yeniMap[id]))return true;
+  }
+  return false;
+}
 
 // ── App ───────────────────────────────────────────────────────────────────────
 // ── Global "Bas Konuş" Balonu ────────────────────────────────────────────────
