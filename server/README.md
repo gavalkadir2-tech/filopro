@@ -5,6 +5,22 @@ verisini göremez. Bir şirket içinde birden fazla kullanıcı olabilir (yönet
 ekip üyeleri) — aynı şirketteki herkes aynı veriyi görür ve senkronize eder.
 Veritabanı gerekmez, düz JSON dosyalarında tutulur.
 
+## Gerçek Zamanlı Senkron (13 Temmuz 2026)
+
+Ek kurulum **gerektirmez** — otomatik çalışır. Önceden cihazlar birbirini en
+geç 45 saniyede bir (periyodik yoklama ile) görürdü; artık bir WebSocket
+bağlantısı üzerinden, biri veri kaydettiği an diğer bağlı cihazlara **anında**
+("değişiklik var, çek") sinyali gönderiliyor — pratikte 1 saniyenin altında.
+
+Önemli teknik not: WebSocket üzerinden **sadece bir bildirim** gider, gerçek
+veri hâlâ her zamanki güvenli `/api/sync/pull` ile çekilir ve sunucudaki
+"son yazan kazanır" (timestamp bazlı) çakışma koruması aynen çalışmaya devam
+eder — bu korumayı kaldırmadık, sadece herkesin birbirini çok daha hızlı
+görmesini sağlayarak iki kişinin aynı kaydı aynı anda değiştirme ihtimalini
+pratikte en aza indirdik. Bağlantı kopsa (ağ sorunu, Render ücretsiz planda
+sunucunun uykuya geçmesi vb.) periyodik yoklama zaten yedek olarak devam
+eder — hiçbir veri kaybı riski yoktur, sadece o an bildirim gecikir.
+
 ## Yerelde Çalıştırma
 
 ```bash

@@ -22,6 +22,8 @@ const cron = require('node-cron');
 const webpush = require('web-push');
 const { authenticator } = require('otplib');
 const { OAuth2Client } = require('google-auth-library');
+const http = require('http');
+const WebSocket = require('ws');
 
 const app = express();
 app.use(cors());
@@ -568,6 +570,7 @@ app.post('/api/sync/push', authMiddleware, (req, res) => {
   }
 
   writeTenantStore(req.user.tenantId, store);
+  if (applied > 0) broadcastChange(req.user.tenantId);
   res.json({ applied, rejected, serverTime: Date.now() });
 });
 
@@ -1020,6 +1023,63 @@ app.post('/api/ai/vision', authMiddleware, aiRateLimit, async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
+// ── Gerçek Zamanlı (WebSocket) Senkronizasyon Bildirimi ─────────────────────────
+// Birisi veri kaydettiğinde, aynı şirketteki diğer bağlı cihazlara ANINDA (45 saniyelik
+// yoklama beklemeden) "değişiklik var, çek" sinyali gönderir. Bu SADECE bir bildirimdir —
+// gerçek veri yine normal /api/sync/pull ile çekilir; WebSocket üzerinden iş verisi
+// akmaz, bu yüzden bağlantı kopsa/Render ücretsiz planda sunucu uykuya geçse bile veri
+// kaybı olmaz, sadece bildirim gecikir (bir sonraki periyodik yoklamada zaten yakalanır).
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server, path: '/ws' });
+const tenantSockets = new Map(); // tenantId -> Set<ws>
+
+wss.on('connection', (ws) => {
+  ws.tenantId = null;
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
+  ws.on('message', (raw) => {
+    let msg;
+    try { msg = JSON.parse(raw); } catch { return; }
+    if (msg.type === 'auth' && msg.token) {
+      try {
+        const payload = jwt.verify(msg.token, JWT_SECRET);
+        if (payload.pending2FA) return; // 2FA tamamlanmamış geçici token'lar kabul edilmez
+        ws.tenantId = payload.tenantId;
+        if (!tenantSockets.has(ws.tenantId)) tenantSockets.set(ws.tenantId, new Set());
+        tenantSockets.get(ws.tenantId).add(ws);
+        ws.send(JSON.stringify({ type: 'auth-ok' }));
+      } catch {
+        ws.send(JSON.stringify({ type: 'auth-error' }));
+      }
+    }
+  });
+  ws.on('close', () => {
+    if (ws.tenantId && tenantSockets.has(ws.tenantId)) {
+      tenantSockets.get(ws.tenantId).delete(ws);
+      if (tenantSockets.get(ws.tenantId).size === 0) tenantSockets.delete(ws.tenantId);
+    }
+  });
+});
+
+// Ölü bağlantıları (sekme kapatılmış, ağ kopmuş vb.) periyodik temizler.
+setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) return ws.terminate();
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, 30000);
+
+// tenantId'ye ait, GÖNDEREN dışındaki tüm bağlı cihazlara "değişiklik var" sinyali yollar.
+function broadcastChange(tenantId, exceptWs) {
+  const sockets = tenantSockets.get(tenantId);
+  if (!sockets) return;
+  const msg = JSON.stringify({ type: 'changed' });
+  sockets.forEach((ws) => {
+    if (ws !== exceptWs && ws.readyState === WebSocket.OPEN) ws.send(msg);
+  });
+}
+
+server.listen(PORT, () => {
   console.log(`FiloPro senkron sunucusu (çok kiracılı) http://localhost:${PORT} adresinde çalışıyor.`);
 });
