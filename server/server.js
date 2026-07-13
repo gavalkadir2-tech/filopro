@@ -449,7 +449,7 @@ app.post('/api/auth/change-password', authMiddleware, rateLimit('changepw', 10),
 // ── Ekip yönetimi (sadece admin) ────────────────────────────────────────────────
 // Aynı şirkete (tenant) yeni bir kullanıcı ekler.
 app.post('/api/users', authMiddleware, adminOnly, rateLimit('adduser', 20), async (req, res) => {
-  const { username, password, role } = req.body || {};
+  const { username, password, role, email } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'Kullanıcı adı ve şifre gerekli.' });
   if (String(password).length < 6) return res.status(400).json({ error: 'Şifre en az 6 karakter olmalı.' });
   const finalRole = role === 'admin' ? 'admin' : 'kullanici';
@@ -458,6 +458,10 @@ app.post('/api/users', authMiddleware, adminOnly, rateLimit('adduser', 20), asyn
   if (users.some((u) => u.username === uname)) {
     return res.status(409).json({ error: 'Bu kullanıcı adı zaten alınmış.' });
   }
+  const cleanEmail = email ? String(email).trim().toLowerCase() : undefined;
+  if (cleanEmail && users.some((u) => u.email === cleanEmail)) {
+    return res.status(409).json({ error: 'Bu e-posta adresiyle (Google hesabıyla) zaten bir kullanıcı var.' });
+  }
   const requester = users.find((u) => u.username === req.user.sub);
   const passwordHash = await bcrypt.hash(password, 10);
   const newUser = {
@@ -465,20 +469,21 @@ app.post('/api/users', authMiddleware, adminOnly, rateLimit('adduser', 20), asyn
     tenantId: req.user.tenantId,
     companyName: requester ? requester.companyName : '',
     username: uname,
+    email: cleanEmail,
     passwordHash,
     role: finalRole,
     createdAt: Date.now(),
   };
   users.push(newUser);
   writeUsers(users);
-  res.json({ username: newUser.username, role: newUser.role, createdAt: newUser.createdAt });
+  res.json({ username: newUser.username, role: newUser.role, email: newUser.email || null, createdAt: newUser.createdAt });
 });
 
 // Aynı şirketteki kullanıcıları listeler (şifre hash'leri asla dönülmez).
 app.get('/api/users', authMiddleware, (req, res) => {
   const users = readUsers()
     .filter((u) => u.tenantId === req.user.tenantId)
-    .map((u) => ({ username: u.username, role: u.role, createdAt: u.createdAt }));
+    .map((u) => ({ username: u.username, role: u.role, email: u.email || null, googleLinked: !!u.email, createdAt: u.createdAt }));
   res.json({ users });
 });
 
