@@ -24,6 +24,7 @@ const { authenticator } = require('otplib');
 const { OAuth2Client } = require('google-auth-library');
 const http = require('http');
 const WebSocket = require('ws');
+const { MongoClient } = require('mongodb');
 
 const app = express();
 app.use(cors());
@@ -99,7 +100,66 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(TENANTS_DIR)) fs.mkdirSync(TENANTS_DIR, { recursive: true });
 if (!fs.existsSync(USERS_FILE)) fs.writeFileSync(USERS_FILE, JSON.stringify({ users: [] }));
 
-// ── Dosya yardımcıları (atomic write: yarıda kesilen yazmalarda veri bozulmaz) ─
+// ── Kalıcı Depolama: MongoDB (varsa) + dosya sistemi (yedek/varsayılan) ──────────
+// SORUN: Render'ın (ve birçok PaaS'ın) ÜCRETSİZ planında disk KALICI DEĞİLDİR —
+// servis her yeniden başladığında/uykuya dalıp uyandığında yerel dosyalar SİLİNİR.
+// ÇÖZÜM: MONGODB_URI tanımlıysa (MongoDB Atlas'ın kalıcı, süresiz ÜCRETSİZ M0 planı
+// önerilir — bkz. README), tüm veri orada saklanır. Geri kalan ~50 yerdeki kod hiç
+// değişmeden çalışmaya devam etsin diye, okuma/yazma fonksiyonları AYNI senkron
+// imzayı korur: bir bellek-içi önbellek (cache) üzerinden ANINDA okur/yazar, MongoDB'ye
+// yazma işlemini ise arka planda (bloklamadan) yapar. MONGODB_URI tanımlı değilse,
+// davranış birebir eskisi gibi kalır (dosya sistemi) — bu yeni özellik hiçbir şeyi
+// bozmaz, sadece isteyen için daha kalıcı bir seçenek ekler.
+const MONGODB_URI = process.env.MONGODB_URI;
+let mongoDb = null;
+const cache = { users: null, tenants: new Map() }; // tenants: tenantId -> {store, aiConfig, backupConfig, pushSubs}
+
+function bosTenantKaydi() {
+  return { store: {}, aiConfig: {}, backupConfig: {}, pushSubs: [] };
+}
+function tenantCacheAl(tenantId) {
+  if (!cache.tenants.has(tenantId)) cache.tenants.set(tenantId, bosTenantKaydi());
+  return cache.tenants.get(tenantId);
+}
+// MongoDB'ye arka planda (bloklamadan) yazar; hata olursa sadece loglar — o anki
+// bellek-içi önbellek zaten güncel olduğu için API yanıtları etkilenmez. Not: Sunucu
+// bu yazma tamamlanmadan hemen çökerse (çok küçük bir ihtimal, milisaniyeler
+// içinde tamamlanır) o TEK değişiklik kaybolabilir — ama bu, dosya sistemindeki
+// "HER restart'ta HER ŞEYİN kaybolması" riskine kıyasla çok küçük bir risktir.
+function mongoTenantYazArkaPlan(tenantId) {
+  if (!mongoDb) return;
+  const veri = tenantCacheAl(tenantId);
+  mongoDb.collection('tenants').replaceOne({ _id: tenantId }, { _id: tenantId, ...veri }, { upsert: true })
+    .catch((e) => console.error(`MongoDB yazma hatası (tenant ${tenantId}):`, e.message));
+}
+function mongoUsersYazArkaPlan() {
+  if (!mongoDb) return;
+  mongoDb.collection('meta').replaceOne({ _id: 'users' }, { _id: 'users', users: cache.users || [] }, { upsert: true })
+    .catch((e) => console.error('MongoDB yazma hatası (users):', e.message));
+}
+
+// Sunucu başlarken MongoDB'ye bağlanır ve TÜM veriyi belleğe önceden yükler
+// (hydration). MONGODB_URI tanımlı değilse bu adım tamamen atlanır, dosya
+// sistemi kullanılmaya devam eder.
+async function mongoBaglantiKurVeYukle() {
+  if (!MONGODB_URI) {
+    console.warn('UYARI: MONGODB_URI tanımlı değil. Veriler yalnızca dosya sisteminde tutulacak — Render\'ın ücretsiz planında bu, her yeniden başlamada KAYBOLABİLİR. Kalıcı ve ücretsiz bir çözüm için README\'deki MongoDB Atlas talimatına bakın.');
+    return;
+  }
+  const client = new MongoClient(MONGODB_URI, { serverSelectionTimeoutMS: 10000 });
+  await client.connect();
+  mongoDb = client.db('filopro');
+  const usersDoc = await mongoDb.collection('meta').findOne({ _id: 'users' });
+  cache.users = usersDoc?.users || [];
+  const tenantDocs = await mongoDb.collection('tenants').find({}).toArray();
+  tenantDocs.forEach((doc) => {
+    const { _id, ...rest } = doc;
+    cache.tenants.set(_id, { ...bosTenantKaydi(), ...rest });
+  });
+  console.log(`MongoDB'ye bağlanıldı — ${cache.users.length} kullanıcı, ${tenantDocs.length} şirket yüklendi (kalıcı depolama aktif).`);
+}
+
+// ── Dosya yardımcıları (MongoDB tanımlı değilse kullanılan varsayılan/yedek yol) ─
 function readJson(file, fallback) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -116,42 +176,52 @@ function tenantFile(tenantId) {
   return path.join(TENANTS_DIR, `${tenantId}.json`);
 }
 function readTenantStore(tenantId) {
+  if (mongoDb) return tenantCacheAl(tenantId).store;
   return readJson(tenantFile(tenantId), {});
 }
 function writeTenantStore(tenantId, store) {
+  if (mongoDb) { tenantCacheAl(tenantId).store = store; mongoTenantYazArkaPlan(tenantId); return; }
   writeJsonAtomic(tenantFile(tenantId), store);
 }
 function aiConfigFile(tenantId) {
   return path.join(TENANTS_DIR, `${tenantId}.ai.json`);
 }
 function readAiConfig(tenantId) {
+  if (mongoDb) return tenantCacheAl(tenantId).aiConfig;
   return readJson(aiConfigFile(tenantId), {});
 }
 function writeAiConfig(tenantId, cfg) {
+  if (mongoDb) { tenantCacheAl(tenantId).aiConfig = cfg; mongoTenantYazArkaPlan(tenantId); return; }
   writeJsonAtomic(aiConfigFile(tenantId), cfg);
 }
 function backupConfigFile(tenantId) {
   return path.join(TENANTS_DIR, `${tenantId}.backup.json`);
 }
 function readBackupConfig(tenantId) {
+  if (mongoDb) return tenantCacheAl(tenantId).backupConfig;
   return readJson(backupConfigFile(tenantId), {});
 }
 function writeBackupConfig(tenantId, cfg) {
+  if (mongoDb) { tenantCacheAl(tenantId).backupConfig = cfg; mongoTenantYazArkaPlan(tenantId); return; }
   writeJsonAtomic(backupConfigFile(tenantId), cfg);
 }
 function pushSubsFile(tenantId) {
   return path.join(TENANTS_DIR, `${tenantId}.push.json`);
 }
 function readPushSubs(tenantId) {
+  if (mongoDb) return tenantCacheAl(tenantId).pushSubs;
   return readJson(pushSubsFile(tenantId), []); // [{username, endpoint, subscription, addedAt}]
 }
 function writePushSubs(tenantId, subs) {
+  if (mongoDb) { tenantCacheAl(tenantId).pushSubs = subs; mongoTenantYazArkaPlan(tenantId); return; }
   writeJsonAtomic(pushSubsFile(tenantId), subs);
 }
 function readUsers() {
+  if (mongoDb) return cache.users || [];
   return readJson(USERS_FILE, { users: [] }).users;
 }
 function writeUsers(users) {
+  if (mongoDb) { cache.users = users; mongoUsersYazArkaPlan(); return; }
   writeJsonAtomic(USERS_FILE, { users });
 }
 
@@ -1095,6 +1165,16 @@ function broadcastChange(tenantId, exceptWs) {
   });
 }
 
-server.listen(PORT, () => {
-  console.log(`FiloPro senkron sunucusu (çok kiracılı) http://localhost:${PORT} adresinde çalışıyor.`);
-});
+// MongoDB (tanımlıysa) tam olarak yüklendikten SONRA sunucu istekleri kabul etmeye
+// başlar — aksi hâlde erken gelen bir istek, henüz belleğe yüklenmemiş eski/boş
+// veriyi görüp üzerine yazabilir. MONGODB_URI tanımlı değilse bu adım anında geçer.
+mongoBaglantiKurVeYukle()
+  .catch((e) => {
+    console.error('HATA: MongoDB\'ye bağlanılamadı, dosya sistemine geri dönülüyor:', e.message);
+    mongoDb = null;
+  })
+  .finally(() => {
+    server.listen(PORT, () => {
+      console.log(`FiloPro senkron sunucusu (çok kiracılı) http://localhost:${PORT} adresinde çalışıyor.`);
+    });
+  });

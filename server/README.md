@@ -5,6 +5,25 @@ verisini göremez. Bir şirket içinde birden fazla kullanıcı olabilir (yönet
 ekip üyeleri) — aynı şirketteki herkes aynı veriyi görür ve senkronize eder.
 Veritabanı gerekmez, düz JSON dosyalarında tutulur.
 
+## ⚠️ Kalıcı Depolama — MongoDB Atlas (ücretsiz, önemle önerilir)
+
+**Önemli:** Render'ın (ve çoğu ücretsiz PaaS'ın) ücretsiz planında disk
+**kalıcı değildir** — servis her yeniden başladığında/uykuya dalıp
+uyandığında yerel dosyalar (`data/` klasörü) **silinebilir**. Varsayılan
+dosya-sistemi yöntemi, ücretsiz Render'da bu riski taşır.
+
+**Çözüm — tamamen ücretsiz:** `.env` dosyasına `MONGODB_URI` ekleyin.
+[MongoDB Atlas](https://cloud.mongodb.com)'ın **M0 planı** kalıcı ve
+süresiz ücretsizdir (512MB, kredi kartı gerekmez) — kurulum adımları
+`.env.example` dosyasında satır satır anlatılıyor.
+
+Bu, MEVCUT hiçbir şeyi bozmaz: `MONGODB_URI` tanımlıysa veriler orada
+saklanır (gerçekten kalıcı); tanımlı değilse sistem eskisi gibi dosya
+sistemiyle çalışmaya devam eder. Zaten dosya sisteminde veriniz varsa,
+`MONGODB_URI` eklediğinizde sıfırdan başlar — mevcut verinizi taşımak
+isterseniz (Ayarlar → Veri Yönetimi'nden bir yedek alıp yeni kurulumda
+geri yükleyerek) bize haber verin, yardımcı oluruz.
+
 ## Tek Şirket Modu (13 Temmuz 2026)
 
 Bu sunucuyu **kendi şirketiniz için özel** kurduysanız (çoğu kurulumda durum
@@ -301,12 +320,18 @@ PDF) çalışır.
 
 ## Mimari Notlar
 
-- `data/users.json` — tüm kullanıcılar (hangi şirkete ait, rolü, bcrypt ile
-  hash'lenmiş şifresi, 2FA sırrı varsa).
-- `data/tenants/<tenantId>.json` — o şirkete ait tüm FiloPro tabloları
-  (araçlar, bakımlar, personel, vb.).
-- `data/tenants/<tenantId>.backup.json` — o şirketin yedek e-postası ayarı.
-- `data/tenants/<tenantId>.push.json` — o şirketteki cihazların push abonelikleri.
+- **`MONGODB_URI` tanımlıysa:** tüm veri MongoDB'de iki koleksiyonda tutulur —
+  `meta` (kullanıcılar) ve `tenants` (şirket başına bir doküman: iş verisi +
+  AI/yedek/push ayarları bir arada). Sunucu başlarken tamamını belleğe önceden
+  yükler; okumalar bellekten anında yapılır, yazmalar hem belleğe hem arka
+  planda MongoDB'ye gider.
+- **`MONGODB_URI` tanımlı değilse** (varsayılan), aşağıdaki dosyalar kullanılır:
+  - `data/users.json` — tüm kullanıcılar (hangi şirkete ait, rolü, bcrypt ile
+    hash'lenmiş şifresi, 2FA sırrı varsa).
+  - `data/tenants/<tenantId>.json` — o şirkete ait tüm FiloPro tabloları
+    (araçlar, bakımlar, personel, vb.).
+  - `data/tenants/<tenantId>.backup.json` — o şirketin yedek e-postası ayarı.
+  - `data/tenants/<tenantId>.push.json` — o şirketteki cihazların push abonelikleri.
 - Şifreler bcrypt ile hash'lenir, asla düz metin saklanmaz.
 - Kullanıcı adları **platform genelinde benzersizdir** (iki farklı şirket aynı
   kullanıcı adını kullanamaz).
