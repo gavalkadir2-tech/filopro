@@ -5,6 +5,21 @@ verisini göremez. Bir şirket içinde birden fazla kullanıcı olabilir (yönet
 ekip üyeleri) — aynı şirketteki herkes aynı veriyi görür ve senkronize eder.
 Veritabanı gerekmez, düz JSON dosyalarında tutulur.
 
+## Tek Şirket Modu (13 Temmuz 2026)
+
+Bu sunucuyu **kendi şirketiniz için özel** kurduysanız (çoğu kurulumda durum
+budur — genel bir SaaS ürünü olarak birden fazla müşteriye açmıyorsanız),
+`.env` dosyasına `TEK_SIRKET_MODU=true` ekleyin.
+
+Bunun etkisi: yeni şirket kaydı (hem normal kayıt hem Google ile kayıt) tümüyle
+kapanır — giriş ekranındaki "Şirket Kaydı Oluştur" sekmesi bile görünmez olur.
+Artık kimse (siz dahil, kazayla) ikinci bir şirket açamaz; herkesin bu tek
+şirkete erişebilmesi için Ayarlar > Kullanıcı & Yetki'den eklenmesi gerekir.
+
+Varsayılan (`TEK_SIRKET_MODU` boş/false) davranış değişmez: birden fazla
+şirket aynı sunucuda kendi kendine kayıt olabilir — bu, ürünü SaaS olarak
+birden fazla müşteriye sunmak isteyenler için korunmuştur.
+
 ## Gerçek Zamanlı Senkron (13 Temmuz 2026)
 
 Ek kurulum **gerektirmez** — otomatik çalışır. Önceden cihazlar birbirini en

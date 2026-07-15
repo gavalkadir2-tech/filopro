@@ -33,6 +33,14 @@ const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET;
 const GROQ_API_KEY = process.env.GROQ_API_KEY; // opsiyonel: yoksa sadece AI modülü çalışmaz, senkron etkilenmez. Ücretsiz anahtar: console.groq.com
 
+// ── Tek Şirket Modu ──────────────────────────────────────────────────────────────
+// Bu, özel/tek bir şirket için kurulmuş bir FiloPro sunucusuysa (çoğu kurulum böyledir),
+// TEK_SIRKET_MODU=true yapın: yeni şirket kaydı tamamen kapanır, sadece Ayarlar >
+// Kullanıcı & Yetki'den eklenen ekip üyeleri giriş yapabilir. Varsayılan olarak KAPALI
+// (false) — birden fazla şirketin aynı sunucuda kendi kendine kayıt olabildiği çok
+// kiracılı (multi-tenant) SaaS kurulumları için geriye dönük uyumluluk sağlar.
+const TEK_SIRKET_MODU = String(process.env.TEK_SIRKET_MODU || '').toLowerCase() === 'true';
+
 // ── Tarayıcı Push Bildirimleri — opsiyonel: yoksa sadece bu özellik devre dışı kalır ──
 // VAPID anahtar çifti üretmek için: npx web-push generate-vapid-keys
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
@@ -195,6 +203,9 @@ app.get('/api/health', (req, res) => res.json({ ok: true, time: Date.now() }));
 
 // ── Yeni şirket kaydı (ilk kullanıcı = admin) ───────────────────────────────────
 app.post('/api/auth/register', rateLimit('register', 10), async (req, res) => {
+  if (TEK_SIRKET_MODU) {
+    return res.status(403).json({ error: 'Bu sunucu tek bir şirket için yapılandırılmış; yeni şirket kaydı kapalı. Hesabınız için Ayarlar > Kullanıcı & Yetki bölümünden bir yönetici ile iletişime geçin.' });
+  }
   const { companyName, username, password, email } = req.body || {};
   if (!companyName || !username || !password) {
     return res.status(400).json({ error: 'Şirket adı, kullanıcı adı ve şifre gerekli.' });
@@ -317,9 +328,10 @@ app.get('/api/auth/2fa/status', authMiddleware, (req, res) => {
 });
 
 // ── Google ile Giriş ─────────────────────────────────────────────────────────────
-// İstemcinin (index.html) buton çizmesi için Google İstemci Kimliğini döner.
+// İstemcinin (index.html) buton çizmesi için Google İstemci Kimliğini döner. Ayrıca
+// yeni şirket kaydının açık olup olmadığını da bildirir (Tek Şirket Modu).
 app.get('/api/auth/google/config', (req, res) => {
-  res.json({ available: !!GOOGLE_CLIENT_ID, clientId: GOOGLE_CLIENT_ID || null });
+  res.json({ available: !!GOOGLE_CLIENT_ID, clientId: GOOGLE_CLIENT_ID || null, allowRegistration: !TEK_SIRKET_MODU });
 });
 
 // Google ile giriş: eşleşen bir hesap varsa token verir (2FA açıksa doğrulama ister);
@@ -348,6 +360,9 @@ app.post('/api/auth/google/login', rateLimit('login', 15), async (req, res) => {
 // Google e-postasını kullanarak sıfırdan bir şirket + admin kullanıcı oluşturur (şifresiz —
 // bu hesap yalnızca Google ile giriş yapabilir).
 app.post('/api/auth/google/register', rateLimit('register', 10), async (req, res) => {
+  if (TEK_SIRKET_MODU) {
+    return res.status(403).json({ error: 'Bu sunucu tek bir şirket için yapılandırılmış; yeni şirket kaydı kapalı. Google hesabınızın giriş yapabilmesi için önce bir yönetici sizi Ayarlar > Kullanıcı & Yetki bölümünden eklemeli/e-postanızı bağlamalı.' });
+  }
   const { credential, companyName } = req.body || {};
   if (!credential || !companyName) return res.status(400).json({ error: 'Google kimlik bilgisi ve şirket adı gerekli.' });
   let g;
