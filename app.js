@@ -162,6 +162,10 @@ const buYilOdenen=cezalar.filter(c=>c.durum==="odendi"&&(c.odemeTarihi||"").slic
 const buAyKesilen=cezalar.filter(c=>(c.tarih||"").slice(0,7)===buAy).length;
 const CEZA_TUR_LABEL={hiz:"H\u0131z Cezas\u0131",kirmiziIsik:"K\u0131rm\u0131z\u0131 I\u015F\u0131k",park:"Hatal\u0131 Park",emniyetKemeri:"Emniyet Kemeri",seritIhlali:"\u015Eerit \u0130hlali",alkol:"Alkol/Uyu\u015Fturucu",belge:"Belge/Muayene",diger:"Di\u011Fer"};
 const araclarim=(id)=>{const a=araclar.find(x=>x.id===id);return(a==null?void 0:a.ad)||"\u2014"};
+const aracPlakasi=(id)=>{const a=araclar.find(x=>x.id===id);return(a==null?void 0:a.plaka)||""};
+const eDevletSorgula=(id)=>{const plaka=aracPlakasi(id);if(!plaka){fpToast("Bu ara\u00e7 i\u00e7in kay\u0131tl\u0131 plaka bulunamad\u0131.","error");return}
+if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(plaka).then(()=>fpToast(`Plaka kopyaland\u0131: ${plaka} \u2014 e-Devlet sayfas\u0131 a\u00e7\u0131l\u0131yor, kimlik do\u011frulamas\u0131ndan sonra yap\u0131\u015Ft\u0131r\u0131p sorgulayabilirsiniz.`)).catch(()=>{});
+window.open("https://www.turkiye.gov.tr/emniyet-arac-plakasina-yazilan-ceza-sorgulama","_blank")};
 const surucuAdi=(id)=>{if(!id)return"\u2014";const p=personelListesi.find(x=>x.id===id);return(p==null?void 0:p.ad)||"\u2014"};
 const siraliListe=[...cezalar].sort((a,b)=>(b.tarih||"").localeCompare(a.tarih||""));
 const disaAktarSatirlari=siraliListe.map(c=>[araclarim(c.aracId),fmtDate(c.tarih),CEZA_TUR_LABEL[c.tur]||c.tur||"",+c.tutar||0,fmtDate(c.sonOdemeTarihi),surucuAdi(c.surucuId),efektifDurum(c)]);
@@ -172,7 +176,7 @@ React.createElement(StatCard,{color:C.red,value:vadesiGecenSayisi,label:"Vadesi 
 React.createElement(StatCard,{color:C.green,value:fmtTL(buYilOdenen),label:"Bu Y\u0131l \xD6denen"}),
 React.createElement(StatCard,{color:C.blue,value:buAyKesilen,label:"Bu Ay Kesilen"})
 ),
-React.createElement(InfoBox,{color:C.blue},"\u2139\uFE0F Trafik cezalar\u0131nda tebli\u011F tarihinden itibaren 15 g\xFCn i\xE7inde \xF6deme yap\u0131l\u0131rsa yasal olarak %25 indirim uygulan\u0131r. Bu ekran indirim tutar\u0131n\u0131 bilgi ama\xE7l\u0131 hesaplar, ger\xE7ek tutar i\xE7in resmi tebligat\u0131 esas al\u0131n."),
+React.createElement(InfoBox,{color:C.blue},"\u2139\uFE0F Trafik cezalar\u0131nda tebli\u011F tarihinden itibaren 15 g\xFCn i\xE7inde \xF6deme yap\u0131l\u0131rsa yasal olarak %25 indirim uygulan\u0131r. Bu ekran indirim tutar\u0131n\u0131 bilgi ama\xE7l\u0131 hesaplar, ger\xE7ek tutar i\xE7in resmi tebligat\u0131 esas al\u0131n. Sat\u0131rdaki \u{1F50D} butonu plakay\u0131 kopyalar ve e-Devlet'in resmi ceza sorgulama sayfas\u0131n\u0131 a\u00e7ar (otomatik veri \u00e7ekilmez, kimlik do\u011frulamas\u0131 sizin taraf\u0131n\u0131zdan yap\u0131l\u0131r). Ara\xE7 \u015Firket ad\u0131na kay\u0131tl\u0131ysa ",React.createElement("a",{href:"https://www.turkiye.gov.tr/egm-arac-plakasina-yazilan-ceza-sorgulama-tuzel-kisi",target:"_blank",rel:"noopener noreferrer",style:{color:C.accent}},"t\xFCzel ki\u015Fi sorgulama sayfas\u0131n\u0131"),React.createElement("span",null," kullanabilirsiniz.")),
 React.createElement("div",{style:{display:"flex",justifyContent:"flex-end",gap:8,marginBottom:14}},
 React.createElement(ExportMenu,{headers:["Ara\xE7","Tarih","T\xFCr","Tutar","Son \xD6deme","S\xFCr\xFCc\xFC","Durum"],rows:disaAktarSatirlari,filename:"filopro-trafik-cezalari",sheetName:"Trafik Cezalar\u0131"}),
 React.createElement("button",{style:S.btn(),onClick:()=>{setForm({tarih:today(),durum:"odenmedi"}),setHata(""),setModalAcik(!0)}},"\uFF0B Ceza Ekle")
@@ -202,6 +206,7 @@ React.createElement("td",{style:S.td},fmtDate(c.sonOdemeTarihi)),
 React.createElement("td",{style:S.td},surucuAdi(c.surucuId)),
 React.createElement("td",{style:S.td},React.createElement(Badge,{d:durum})),
 React.createElement("td",{style:S.td},React.createElement("div",{style:{display:"flex",gap:5}},
+React.createElement("button",{style:S.btnO,title:"e-Devlet'te sorgula (plaka kopyalan\u0131r)",onClick:()=>eDevletSorgula(c.aracId)},"\u{1F50D}"),
 React.createElement("button",{style:S.btnO,onClick:()=>{setForm(c),setHata(""),setModalAcik(!0)}},"\u270F\uFE0F"),
 React.createElement("button",{style:S.btnR,onClick:()=>sil(c.id)},"\u{1F5D1}")
 ))
