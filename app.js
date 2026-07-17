@@ -169,7 +169,7 @@ React.createElement("div",{style:S.secTitle},"\u{1F69C} Ara\xE7 Durum \xD6zeti")
 React.createElement("table",{style:S.tbl},React.createElement("thead",null,React.createElement("tr",null,React.createElement("th",{style:S.th},"Ara\xE7"),React.createElement("th",{style:S.th},"Tip"),React.createElement("th",{style:S.th},"Marka/Model"),React.createElement("th",{style:S.th},"Saat"),React.createElement("th",{style:S.th},"Km"),React.createElement("th",{style:S.th},"Durum"))),React.createElement("tbody",null,e.map(E=>{var U,J;return React.createElement("tr",{key:E.id},React.createElement("td",{style:S.td},React.createElement("strong",{style:{color:C.white}},E.ad)),React.createElement("td",{style:S.td},E.tip),React.createElement("td",{style:S.td},E.markaModel||"\u2014"),React.createElement("td",{style:S.td},((U=E.saat)==null?void 0:U.toLocaleString("tr-TR"))||"\u2014"," sa"),React.createElement("td",{style:S.td},((J=E.km)==null?void 0:J.toLocaleString("tr-TR"))||"\u2014"," km"),React.createElement("td",{style:S.td},React.createElement(Badge,{d:E.durum})))}))
 )
 ),
-React.createElement("div",{style:{display:"grid",gridTemplateColumns:"minmax(260px,1fr) 2fr",gap:16,marginBottom:16,alignItems:"start"}},
+React.createElement("div",{style:S.g2},
 React.createElement("div",{style:S.card,className:"fp-card"},
 React.createElement("div",{style:S.secTitle},"\u{1F31F} Ay\u0131n Personeli"),
 React.createElement("div",{style:{minHeight:180,display:"flex",alignItems:"center"}},
