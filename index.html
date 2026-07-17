@@ -84,9 +84,11 @@ table tbody tr{transition:background .12s ease;}
 table tbody tr:hover{background:rgba(255,255,255,.028);}
 a{color:var(--accent);}
 .fp-card{transition:border-color .15s ease,transform .15s ease,box-shadow .15s ease;}
-.fp-card:hover{border-color:#3a4270;box-shadow:0 6px 18px -8px rgba(0,0,0,.5);}
+.fp-card:hover{border-color:#3a4270;box-shadow:0 10px 28px -10px rgba(0,0,0,.55);transform:translateY(-2px);}
+.fp-stat{overflow:hidden;}
+.fp-stat:hover{transform:translateY(-3px);}
 .fp-navitem{transition:all .15s ease;}
-.fp-navitem:hover{background:rgba(255,255,255,.04)!important;color:#e2e8f0!important;}
+.fp-navitem:hover{background:rgba(255,255,255,.04)!important;color:#e2e8f0!important;transform:translateX(2px);}
 .fp-fade{animation:fpFadeUp .25s ease;}
 .fp-pulse{animation:fpPulse 2s ease-in-out infinite;}
 @keyframes fpFade{from{opacity:0;}to{opacity:1;}}
@@ -105,6 +107,14 @@ a{color:var(--accent);}
 </head>
 <body>
 <div id="root"></div>
+<script>
+// SADECE Capacitor native kabuğu içindeyken (Android/iOS uygulaması) yüklenir.
+// Düz web sitesi olarak açıldığında window.Capacitor tanımsız olur ve bu satır hiçbir şey yapmaz;
+// app.js otomatik olarak tarayıcı içi navigator.geolocation.watchPosition yöntemine döner.
+if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+  document.write('<script src="./native-konum-bridge.js"><\/script>');
+}
+</script>
 <script src="app.js"></script>
 <script>
 // Offline destek için service worker kaydı. sw.js dosyası index.html ile aynı
