@@ -222,6 +222,10 @@ if(!arac)return React.createElement(Modal,{title:"Ara\xE7 Karnesi",onClose},Reac
 
 return React.createElement(Modal,{title:`\u{1F4CB} ${arac.ad} \u2014 Ara\xE7 Karnesi`,onClose,width:820},
 
+React.createElement("div",{style:{display:"flex",justifyContent:"flex-end",marginBottom:10}},
+React.createElement("button",{style:S.btnO,onClick:onClose},"\u2715 Kapat")
+),
+
 React.createElement("div",{style:S.g4},
 React.createElement(StatCard,{color:C.accent,value:fmtTL(genelToplamMaliyet),label:"Toplam Maliyet",icon:"\u{1F4B0}"}),
 React.createElement(StatCard,{color:C.blue,value:fmtTL(yakitToplam),label:"Toplam Yak\u0131t Gideri",icon:"\u26FD"}),
@@ -258,7 +262,10 @@ arac.notlar&&React.createElement("div",{style:{marginTop:14,paddingTop:14,border
 ),
 
 aktifSekme==="yakit"&&React.createElement("div",{style:S.card,className:"fp-card"},
-React.createElement("div",{style:{fontSize:12,color:C.muted,marginBottom:10}},"Toplam ",yakitLitreToplam.toLocaleString("tr-TR")," Lt \xB7 ",fmtTL(yakitToplam)),
+React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8,marginBottom:10}},
+React.createElement("div",{style:{fontSize:12,color:C.muted}},"Toplam ",yakitLitreToplam.toLocaleString("tr-TR")," Lt \xB7 ",fmtTL(yakitToplam)),
+React.createElement("button",{style:S.btnO,onClick:()=>{onClose(),fpNav("akaryakit")}},"\u26FD Akaryak\u0131t Mod\xFClüne Git")
+),
 yakitlar.length===0?React.createElement("div",{style:{color:C.muted,fontSize:13}},"Yak\u0131t kayd\u0131 yok."):React.createElement("table",{style:S.tbl},
 React.createElement("thead",null,React.createElement("tr",null,React.createElement("th",{style:S.th},"Tarih"),React.createElement("th",{style:S.th},"Kaynak"),React.createElement("th",{style:S.th},"Miktar"),React.createElement("th",{style:S.th},"Toplam"))),
 React.createElement("tbody",null,[...yakitlar].sort((x,y)=>(y.tarih||"").localeCompare(x.tarih||"")).slice(0,15).map(y=>React.createElement("tr",{key:y.id},
@@ -271,6 +278,9 @@ React.createElement("td",{style:S.td},fmtTL(y.toplam))
 ),
 
 aktifSekme==="bakim"&&React.createElement("div",{style:S.card,className:"fp-card"},
+React.createElement("div",{style:{display:"flex",justifyContent:"flex-end",marginBottom:10}},
+React.createElement("button",{style:S.btnO,onClick:()=>{onClose(),fpNav("arac")}},"\u{1F527} Bak\u0131m Y\xF6netimine Git")
+),
 bakimlar.length===0?React.createElement("div",{style:{color:C.muted,fontSize:13}},"Bak\u0131m kayd\u0131 yok."):React.createElement("table",{style:S.tbl},
 React.createElement("thead",null,React.createElement("tr",null,React.createElement("th",{style:S.th},"Tarih"),React.createElement("th",{style:S.th},"Tip"),React.createElement("th",{style:S.th},"Maliyet"),React.createElement("th",{style:S.th},"Durum"))),
 React.createElement("tbody",null,[...bakimlar].sort((x,y)=>(y.tarih||"").localeCompare(x.tarih||"")).map(b=>React.createElement("tr",{key:b.id},
