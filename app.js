@@ -356,6 +356,15 @@ const araclar=LS.get("araclar"),personelListesi=LS.get("personel")||[],cariler=L
 [stokHareketleri,setStokHareketleri]=useState(LS.get("stokHareketleri")),
 [telegramBildirimleri,setTelegramBildirimleri]=useState(LS.get("telegramMasrafBildirimleri")),
 [hesaplar]=useState(LS.get("hesaplar")),
+[faturalar,setFaturalar]=useState(LS.get("faturalar")),
+[kasaHareketleri]=useState(LS.get("kasaHareketleri")),
+[cariYakitFiyatlari,setCariYakitFiyatlari]=useState(LS.get("cariYakitFiyatlari")),
+[topluModal,setTopluModal]=useState(!1),
+[topluForm,setTopluForm]=useState({}),
+[topluSatirlar,setTopluSatirlar]=useState([{aracId:"",miktar:""}]),
+[topluHata,setTopluHata]=useState(""),
+[fiyatModal,setFiyatModal]=useState(!1),
+[fiyatForm,setFiyatForm]=useState({}),
 [aktifSekme,setAktifSekme]=useState("ikmaller"),
 [ikmalModal,setIkmalModal]=useState(!1),
 [ikmalForm,setIkmalForm]=useState({}),
@@ -366,6 +375,13 @@ const araclar=LS.get("araclar"),personelListesi=LS.get("personel")||[],cariler=L
 varsayilanFiyat=getSettings().varsayilanYakitFiyat||0,
 
 yakitStoklari=envanterKalemleri.filter(k=>/yak[iı]t|mazot|benzin|dizel/i.test(k.ad||"")||/yak[iı]t/i.test(k.kategori||"")),
+depoKritikStoklar=yakitStoklari.filter(k=>(+k.miktar||0)<=(+k.minMiktar||0)),
+yakitCariIdleri=[...new Set(yakitlar.filter(y=>y.kaynak==="cari"&&y.cariId).map(y=>y.cariId))],
+yakitFaturalari=faturalar.filter(f=>f.tur==="alinan"&&yakitlar.some(y=>y.faturaId===f.id)),
+cariBorcToplam=yakitFaturalari.filter(f=>faturaDurum(f,kasaHareketleri)!=="odendi").reduce((t,f)=>t+faturaKalan(f,kasaHareketleri),0),
+cariSabitFiyatBul=cariId=>{const k=cariYakitFiyatlari.find(x=>x.cariId===cariId);return k?+k.fiyat:null},
+cariSabitFiyatKaydet=()=>{if(!fiyatForm.cariId||!(+fiyatForm.fiyat>0)){fpToast("Cari ve ge\xE7erli bir fiyat girin.","error");return}const yeni=cariYakitFiyatlari.some(k=>k.cariId===fiyatForm.cariId)?cariYakitFiyatlari.map(k=>k.cariId===fiyatForm.cariId?{...k,fiyat:+fiyatForm.fiyat}:k):[...cariYakitFiyatlari,{id:uid(),cariId:fiyatForm.cariId,fiyat:+fiyatForm.fiyat}];LS.set("cariYakitFiyatlari",yeni),setCariYakitFiyatlari(yeni),setFiyatModal(!1),fpToast("\u2705 Sabit litre fiyat\u0131 kaydedildi.")},
+cariSabitFiyatSil=async cariId=>{if(!await fpConfirm("Bu carinin sabit fiyat\u0131 kald\u0131r\u0131ls\u0131n m\u0131?"))return;const yeni=cariYakitFiyatlari.filter(k=>k.cariId!==cariId);LS.set("cariYakitFiyatlari",yeni),setCariYakitFiyatlari(yeni)},
 
 kaynakLabel={nakit:"\u{1F4B3} Nakit/Kart",kart:"\u{1F510} Pompa Kart\u0131",cari:"\u{1F91D} Cari (Veresiye)",depo:"\u{1F3E2} Depo Stoku",telegram:"\u{1F4F1} Telegram"},
 kaynakRenk={nakit:C.blue,kart:C.purple,cari:C.yellow,depo:C.teal,telegram:C.accent},
@@ -398,9 +414,9 @@ setIkmalHata("");
 const birimFiyat=+ikmalForm.fiyat,toplamTutar=+ikmalForm.toplamFiyat,litre=birimFiyat>0?Math.round(toplamTutar/birimFiyat*100)/100:0;
 let faturaId=null;
 if(kaynak==="cari"){
-const faturalar=LS.get("faturalar"),arac=araclar.find(a=>a.id===ikmalForm.aracId),cari=cariler.find(c=>c.id===ikmalForm.cariId);
-const yeniFatura={id:uid(),tur:"alinan",musteriId:null,tedarikciId:ikmalForm.cariId,tarih:ikmalForm.tarih||today(),tutar:toplamTutar,kdv:0,toplam:toplamTutar,aciklama:`Akaryak\u0131t al\u0131m\u0131 \u2014 ${(arac==null?void 0:arac.ad)||""} (${litre} Lt)`,no:`AF-${today().slice(0,7)}-${String(faturalar.length+1).padStart(3,"0")}`};
-LS.set("faturalar",[...faturalar,yeniFatura]),faturaId=yeniFatura.id;
+const guncelFaturalar=LS.get("faturalar"),arac=araclar.find(a=>a.id===ikmalForm.aracId),cari=cariler.find(c=>c.id===ikmalForm.cariId);
+const yeniFatura={id:uid(),tur:"alinan",musteriId:null,tedarikciId:ikmalForm.cariId,tarih:ikmalForm.tarih||today(),tutar:toplamTutar,kdv:0,toplam:toplamTutar,aciklama:`Akaryak\u0131t al\u0131m\u0131 \u2014 ${(arac==null?void 0:arac.ad)||""} (${litre} Lt)`,no:`AF-${today().slice(0,7)}-${String(guncelFaturalar.length+1).padStart(3,"0")}`};
+LS.set("faturalar",[...guncelFaturalar,yeniFatura]),setFaturalar([...guncelFaturalar,yeniFatura]),faturaId=yeniFatura.id;
 fpToast(`\u2705 ${(cari==null?void 0:cari.ad)||"Cari"} ad\u0131na ${fmtTL(toplamTutar)} tutar\u0131nda al\u0131nan fatura olu\u015Fturuldu.`)
 }
 const yeniIkmalKaydi={id:ikmalForm.id||uid(),aracId:ikmalForm.aracId,personelId:ikmalForm.personelId||null,tarih:ikmalForm.tarih||today(),kaynak,cariId:kaynak==="cari"?ikmalForm.cariId:null,faturaId,miktar:litre,fiyat:birimFiyat,toplam:toplamTutar,depo:ikmalForm.depo||""};
@@ -408,6 +424,44 @@ const yeniYakitlar=ikmalForm.id?yakitlar.map(y=>y.id===ikmalForm.id?yeniIkmalKay
 LS.set("yakitlar",yeniYakitlar),setYakitlar(yeniYakitlar),setIkmalModal(!1)
 },
 
+topluKaydet=()=>{
+const gecerliSatirlar=topluSatirlar.filter(s=>s.aracId&&+s.miktar>0);
+if(gecerliSatirlar.length===0){setTopluHata("En az bir ge\xE7erli sat\u0131r (ara\xE7 + miktar) girin.");return}
+if(!(+topluForm.fiyat>0)){setTopluHata("Litre fiyat\u0131 0'dan b\xFCy\xFCk olmal\u0131d\u0131r.");return}
+const kaynak=topluForm.kaynak||"nakit";
+if(kaynak==="cari"&&!topluForm.cariId){setTopluHata("Cari se\xE7imi zorunludur.");return}
+let seciliKalem=null;
+if(kaynak==="depo"){
+if(!topluForm.stokKalemId){setTopluHata("Depo stok kalemi se\xE7imi zorunludur.");return}
+seciliKalem=envanterKalemleri.find(k=>k.id===topluForm.stokKalemId);
+const istenenToplam=gecerliSatirlar.reduce((t,s)=>t+(+s.miktar||0),0);
+if(!seciliKalem||istenenToplam>(+seciliKalem.miktar||0)){setTopluHata(`Yetersiz stok. Depoda ${seciliKalem?seciliKalem.miktar:0} Lt var, ${istenenToplam} Lt isteniyor.`);return}
+}
+setTopluHata("");
+const birimFiyat=+topluForm.fiyat,tarih=topluForm.tarih||today(),araclSayisi=gecerliSatirlar.length;
+const yeniKayitlar=gecerliSatirlar.map(s=>({id:uid(),aracId:s.aracId,personelId:null,tarih,kaynak,cariId:kaynak==="cari"?topluForm.cariId:null,stokKalemId:kaynak==="depo"?topluForm.stokKalemId:null,faturaId:null,miktar:+s.miktar,fiyat:birimFiyat,toplam:Math.round(birimFiyat*s.miktar*100)/100,depo:topluForm.depo||"Toplu Giri\u015F"}));
+if(kaynak==="depo"){
+const istenenToplam=gecerliSatirlar.reduce((t,s)=>t+(+s.miktar||0),0),
+yeniKalemler=envanterKalemleri.map(k=>k.id===topluForm.stokKalemId?{...k,miktar:(+k.miktar||0)-istenenToplam}:k);
+LS.set("envanterKalemleri",yeniKalemler),setEnvanterKalemleri(yeniKalemler);
+const yeniStokHareket={id:uid(),tarih,tur:"cikis",kalemId:topluForm.stokKalemId,depoId:seciliKalem?seciliKalem.depoId:null,miktar:istenenToplam,kullanan:"",aciklama:`Toplu ara\xE7 yak\u0131t ikmali (${araclSayisi} ara\xE7)`},
+yeniStokHareketleri=[yeniStokHareket,...stokHareketleri];
+LS.set("stokHareketleri",yeniStokHareketleri),setStokHareketleri(yeniStokHareketleri)
+}
+let sonYakitlar=[...yakitlar,...yeniKayitlar];
+if(kaynak==="cari"){
+const toplamTutar=yeniKayitlar.reduce((t,y)=>t+y.toplam,0),
+guncelFaturalar=LS.get("faturalar"),
+toplamLitre=gecerliSatirlar.reduce((t,s)=>t+(+s.miktar||0),0),
+yeniFatura={id:uid(),tur:"alinan",musteriId:null,tedarikciId:topluForm.cariId,tarih,tutar:toplamTutar,kdv:0,toplam:toplamTutar,aciklama:`Toplu akaryak\u0131t al\u0131m\u0131 \u2014 ${araclSayisi} ara\xE7 (${toplamLitre} Lt)`,no:`AF-${today().slice(0,7)}-${String(guncelFaturalar.length+1).padStart(3,"0")}`};
+LS.set("faturalar",[...guncelFaturalar,yeniFatura]),setFaturalar([...guncelFaturalar,yeniFatura]);
+const yeniKayitIdleri=new Set(yeniKayitlar.map(y=>y.id));
+sonYakitlar=sonYakitlar.map(y=>yeniKayitIdleri.has(y.id)?{...y,faturaId:yeniFatura.id}:y);
+fpToast(`\u2705 ${araclSayisi} ara\xE7 i\xE7in toplu ikmal ve ${fmtTL(toplamTutar)} tutar\u0131nda fatura olu\u015Fturuldu.`)
+}else fpToast(`\u2705 ${araclSayisi} ara\xE7 i\xE7in ikmal kaydedildi.`);
+LS.set("yakitlar",sonYakitlar),setYakitlar(sonYakitlar);
+setTopluModal(!1),setTopluSatirlar([{aracId:"",miktar:""}]),setTopluForm({})
+},
 ikmalSil=async id=>{
 if(!await fpConfirm("Bu ikmal kayd\u0131 silinsin mi? \u0130lgili fatura veya stok hareketi varsa onlar etkilenmez, elle kontrol edin."))return;
 const yeniYakitlar=yakitlar.filter(y=>y.id!==id);
@@ -490,6 +544,26 @@ return[(arac==null?void 0:arac.ad)||"\u2014",fmtDate(y.tarih),kaynakLabel[y.kayn
 
 bekleyenTelegram=telegramBildirimleri.filter(b=>b.durum==="bekliyor"),
 
+grafikVarMi=!!RC.BarChart,
+aylikTrendVerisi=months().map(ay=>({ay:ay.slice(5,7)+"/"+ay.slice(2,4),Gider:Math.round(yakitlar.filter(y=>{var t;return(t=y.tarih)==null?void 0:t.startsWith(ay)}).reduce((t,y)=>t+(+y.toplam||0),0))})),
+anomaliArac=(()=>{
+const buAy=today().slice(0,7),
+gecmis6Ay=months().slice(0,5),
+sonuc=[];
+araclar.forEach(a=>{
+const buAyKayitlari=yakitlar.filter(y=>y.aracId===a.id&&y.tarih&&y.tarih.startsWith(buAy)&&+y.miktar>0);
+if(buAyKayitlari.length===0)return;
+const buAyOrtalamaFiyat=buAyKayitlari.reduce((t,y)=>t+(+y.fiyat||0),0)/buAyKayitlari.length,
+gecmisKayitlari=yakitlar.filter(y=>y.aracId===a.id&&gecmis6Ay.some(ay=>y.tarih&&y.tarih.startsWith(ay))&&+y.miktar>0);
+if(gecmisKayitlari.length<2)return;
+const gecmisOrtalamaFiyat=gecmisKayitlari.reduce((t,y)=>t+(+y.fiyat||0),0)/gecmisKayitlari.length;
+if(gecmisOrtalamaFiyat<=0)return;
+const sapmaYuzde=(buAyOrtalamaFiyat-gecmisOrtalamaFiyat)/gecmisOrtalamaFiyat*100;
+Math.abs(sapmaYuzde)>20&&sonuc.push({arac:a,buAyOrtalamaFiyat,gecmisOrtalamaFiyat,sapmaYuzde})
+});
+return sonuc.sort((x,y)=>Math.abs(y.sapmaYuzde)-Math.abs(x.sapmaYuzde))
+})(),
+
 {goster:gosterIkmal,sayfa:sayfaIkmal,setSayfa:setSayfaIkmal,sayfaBoyu:sayfaBoyuIkmal,setSayfaBoyu:setSayfaBoyuIkmal,toplam:toplamIkmal}=useSayfalama(siraliYakitlar,10),
 {goster:gosterOtomatik,sayfa:sayfaOtomatik,setSayfa:setSayfaOtomatik,sayfaBoyu:sayfaBoyuOtomatik,setSayfaBoyu:setSayfaBoyuOtomatik,toplam:toplamOtomatik}=useSayfalama([...otomatikIkmaller].sort((a,b)=>{var t;return(t=b.tarih)==null?void 0:t.localeCompare(a.tarih)}),10);
 
@@ -503,8 +577,13 @@ React.createElement(StatCard,{color:limitAsimi>0?C.red:C.muted,value:limitAsimi,
 React.createElement(TabBar,{tabs:[["ikmaller","\u{1F4CB} \u0130kmaller"],["pompalar","\u26FD Pompalar"],["limitler","\u{1F3AF} Ara\xE7 Limitleri"],["telegram",`\u{1F4F1} Telegram'dan Gelenler${bekleyenTelegram.length>0?` (${bekleyenTelegram.length})`:""}`],["otomatik","\u{1F510} Pompa Kart\u0131 Kay\u0131tlar\u0131"]],active:aktifSekme,onChange:setAktifSekme}),
 
 aktifSekme==="ikmaller"&&React.createElement("div",null,
+(depoKritikStoklar.length>0||cariBorcToplam>0)&&React.createElement("div",{style:S.g2},
+depoKritikStoklar.length>0&&React.createElement(Warn,{msg:`Depoda kritik seviyede yak\u0131t stoku: ${depoKritikStoklar.map(k=>`${k.ad} (${k.miktar} ${k.birim||"Lt"})`).join(", ")}`,c:C.red}),
+cariBorcToplam>0&&React.createElement(Warn,{msg:`Akaryak\u0131t tedarik\xE7ilerine \xF6denmemi\u015F toplam bor\xE7: ${fmtTL(cariBorcToplam)}`,c:C.yellow})
+),
 React.createElement("div",{style:{display:"flex",justifyContent:"flex-end",gap:8,marginBottom:14,flexWrap:"wrap"}},
 React.createElement(ExportMenu,{headers:["Ara\xE7","Tarih","Kaynak","Miktar (Lt)","Birim Fiyat","Toplam","Depo/Not"],rows:disaAktarSatirlari,filename:"filopro-akaryakit",sheetName:"Akaryak\u0131t"}),
+React.createElement("button",{style:S.btnO,onClick:()=>{setTopluForm({tarih:today(),kaynak:"nakit",fiyat:varsayilanFiyat||""}),setTopluSatirlar([{aracId:"",miktar:""}]),setTopluHata(""),setTopluModal(!0)}},"\u{1F4E6} Toplu Giri\u015F"),
 React.createElement("button",{style:S.btn(),onClick:()=>{setIkmalForm({tarih:today(),kaynak:"nakit",fiyat:varsayilanFiyat||""}),setIkmalHata(""),setIkmalModal(!0)}},"\uFF0B \u0130kmal Ekle")
 ),
 React.createElement("div",{style:S.card,className:"fp-card"},
@@ -524,7 +603,7 @@ const arac=araclar.find(a=>a.id===y.aracId),kaynak=y.kaynak||"nakit";
 return React.createElement("tr",{key:y.id},
 React.createElement("td",{style:S.td},React.createElement("strong",{style:{color:C.white}},(arac==null?void 0:arac.ad)||"\u2014")),
 React.createElement("td",{style:S.td},fmtDate(y.tarih)),
-React.createElement("td",{style:S.td},React.createElement("span",{style:S.badge(kaynakRenk[kaynak]||C.muted)},kaynakLabel[kaynak]||kaynak)),
+React.createElement("td",{style:S.td},React.createElement("span",{style:S.badge(kaynakRenk[kaynak]||C.muted)},kaynakLabel[kaynak]||kaynak),kaynak==="cari"&&y.faturaId&&(()=>{const fat=faturalar.find(f=>f.id===y.faturaId);if(!fat)return null;const durum=faturaDurum(fat,kasaHareketleri);return React.createElement("div",{style:{marginTop:3}},React.createElement(Badge,{d:durum}))})()),
 React.createElement("td",{style:S.td},y.miktar," Lt"),
 React.createElement("td",{style:S.td},fmtTL(y.fiyat)),
 React.createElement("td",{style:S.td},React.createElement("strong",{style:{color:C.accent}},fmtTL(y.toplam))),
@@ -536,6 +615,17 @@ React.createElement("button",{style:S.btnR,onClick:()=>ikmalSil(y.id)},"\u{1F5D1
 )
 }))),
 React.createElement(Sayfalama,{sayfa:sayfaIkmal,setSayfa:setSayfaIkmal,sayfaBoyu:sayfaBoyuIkmal,setSayfaBoyu:setSayfaBoyuIkmal,toplam:toplamIkmal})
+),
+React.createElement("div",{style:S.g2},
+React.createElement("div",{style:S.card,className:"fp-card"},
+React.createElement("div",{style:S.secTitle},"\u{1F4C8} Son 6 Ay Yak\u0131t Gideri"),
+grafikVarMi?React.createElement(ResponsiveContainer,{width:"100%",height:200},React.createElement(BarChart,{data:aylikTrendVerisi},React.createElement(CartesianGrid,{strokeDasharray:"3 3",stroke:C.border}),React.createElement(XAxis,{dataKey:"ay",tick:{fill:C.muted,fontSize:11}}),React.createElement(YAxis,{tick:{fill:C.muted,fontSize:10},tickFormatter:v=>v/1e3+"K"}),React.createElement(Tooltip,{contentStyle:{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,fontSize:12},formatter:v=>fmtTL(v)}),React.createElement(Bar,{dataKey:"Gider",fill:C.accent,radius:[4,4,0,0]}))):React.createElement("div",{style:{color:C.muted,fontSize:13}},"Grafik k\xFCt\xFCphanesi y\xFCklenemedi.")
+),
+React.createElement("div",{style:S.card,className:"fp-card"},
+React.createElement("div",{style:S.secTitle},"\u{1F575}\uFE0F Anomali Uyar\u0131lar\u0131"),
+React.createElement("div",{style:{fontSize:12,color:C.muted,marginBottom:10}},"Bu ay\u0131n ortalama litre fiyat\u0131, ara\xE7\u0131n son 6 ayl\u0131k ortalamas\u0131ndan %20'den fazla sapt\u0131\u011F\u0131nda burada listelenir."),
+anomaliArac.length===0?React.createElement("div",{style:{color:C.muted,fontSize:13}},"\u2705 Bu ay anormal bir sapma tespit edilmedi."):anomaliArac.map(x=>React.createElement("div",{key:x.arac.id,style:{...S.alert(x.sapmaYuzde>0?C.red:C.yellow),marginBottom:8}},React.createElement("div",{style:{flex:1}},React.createElement("div",{style:{fontWeight:700,marginBottom:2}},x.arac.ad),React.createElement("div",{style:{fontSize:12,opacity:.85}},"Bu ay: ",fmtTL(x.buAyOrtalamaFiyat),"/Lt \u2014 Ortalama: ",fmtTL(x.gecmisOrtalamaFiyat),"/Lt")),React.createElement("span",{style:{fontSize:13,fontWeight:700}},x.sapmaYuzde>0?"+":"",x.sapmaYuzde.toFixed(0),"%")))
+)
 )
 ),
 
@@ -564,7 +654,7 @@ React.createElement("div",{style:{fontSize:12}},limit?React.createElement("span"
 
 aktifSekme==="telegram"&&React.createElement("div",null,
 React.createElement(InfoBox,{color:C.blue},"\u2139\uFE0F Personel, yolda ald\u0131\u011F\u0131 yak\u0131t fi\u015Fini uygulamaya girmeden do\u011Frudan Telegram bota foto\u011Fraf olarak g\xF6nderebilir. Buradan hangi ara\xE7 i\xE7in oldu\u011Funu se\xE7ip onaylad\u0131\u011F\u0131n\u0131zda otomatik olarak ikmal kayd\u0131 olu\u015Fturulur."),
-bekleyenTelegram.length===0?React.createElement("div",{style:{...S.card,color:C.muted,fontSize:13}},"Bekleyen Telegram bildirimi yok."):bekleyenTelegram.map(b=>React.createElement(TelegramYakitSatiri,{key:b.id,bildirim:b,araclar:araclar,hesaplar:hesaplar,onOnayla:telegramOnayla,onReddet:telegramReddet}))
+bekleyenTelegram.length===0?React.createElement("div",{style:{...S.card,color:C.muted,fontSize:13}},"Bekleyen Telegram bildirimi yok."):bekleyenTelegram.map(b=>React.createElement(TelegramYakitSatiri,{key:b.id,bildirim:b,araclar:araclar,hesaplar:hesaplar,personelListesi:personelListesi,yakitlar:yakitlar,onOnayla:telegramOnayla,onReddet:telegramReddet}))
 ),
 
 aktifSekme==="otomatik"&&React.createElement("div",null,
@@ -618,7 +708,7 @@ React.createElement(FG,{label:"Tarih"},React.createElement("input",{type:"date",
 React.createElement(FG,{label:"Miktar (Lt)"},React.createElement("input",{type:"number",step:"0.01",style:S.inp,value:ikmalForm.miktar||"",onChange:e=>setIkmalForm(f=>({...f,miktar:+e.target.value}))}))
 )
 ):React.createElement(React.Fragment,null,
-ikmalForm.kaynak==="cari"&&React.createElement(FG,{label:"Cari (Akaryak\u0131t Tedarik\xE7isi)"},React.createElement("select",{style:S.sel,value:ikmalForm.cariId||"",onChange:e=>setIkmalForm(f=>({...f,cariId:idVal(e.target.value)}))},React.createElement("option",{value:""},"\u2014 Se\xE7iniz \u2014"),cariler.map(c=>React.createElement("option",{key:c.id,value:c.id},c.ad)))),
+ikmalForm.kaynak==="cari"&&React.createElement(FG,{label:"Cari (Akaryak\u0131t Tedarik\xE7isi)"},React.createElement("select",{style:S.sel,value:ikmalForm.cariId||"",onChange:e=>{const secilenId=idVal(e.target.value),sabit=cariSabitFiyatBul(secilenId);setIkmalForm(f=>({...f,cariId:secilenId,fiyat:sabit!=null?sabit:f.fiyat}))}},React.createElement("option",{value:""},"\u2014 Se\xE7iniz \u2014"),cariler.map(c=>React.createElement("option",{key:c.id,value:c.id},c.ad,cariSabitFiyatBul(c.id)!=null?` (Sabit: ${fmtTL(cariSabitFiyatBul(c.id))}/Lt)`:""))),ikmalForm.cariId&&React.createElement("div",{style:{fontSize:11,marginTop:5}},React.createElement("span",{style:{color:C.accent,cursor:"pointer",textDecoration:"underline"},onClick:()=>{setFiyatForm({cariId:ikmalForm.cariId,fiyat:cariSabitFiyatBul(ikmalForm.cariId)||ikmalForm.fiyat||""}),setFiyatModal(!0)}},cariSabitFiyatBul(ikmalForm.cariId)!=null?"\u270F\uFE0F Sabit fiyat\u0131 d\xFCzenle":"\u{1F4B0} Bu cari i\xE7in sabit litre fiyat\u0131 tan\u0131mla"))),
 React.createElement("div",{style:S.g2},
 React.createElement(FG,{label:"Tarih"},React.createElement("input",{type:"date",style:S.inp,value:ikmalForm.tarih||"",onChange:e=>setIkmalForm(f=>({...f,tarih:e.target.value}))})),
 React.createElement(FG,{label:"Depo / \u0130stasyon"},React.createElement("input",{style:S.inp,value:ikmalForm.depo||"",onChange:e=>setIkmalForm(f=>({...f,depo:e.target.value}))}))
@@ -661,12 +751,62 @@ React.createElement("div",{style:{display:"flex",gap:10,justifyContent:"flex-end
 React.createElement("button",{style:S.btnO,onClick:()=>setLimitModal(!1)},"\u0130ptal"),
 React.createElement("button",{style:S.btn(),onClick:limitKaydet},"Kaydet")
 )
+),
+
+fiyatModal&&React.createElement(Modal,{title:"Sabit Litre Fiyat\u0131",onClose:()=>setFiyatModal(!1)},
+React.createElement(FG,{label:"Cari"},React.createElement("select",{style:S.sel,value:fiyatForm.cariId||"",onChange:e=>setFiyatForm(f=>({...f,cariId:idVal(e.target.value)}))},React.createElement("option",{value:""},"\u2014 Se\xE7iniz \u2014"),cariler.map(c=>React.createElement("option",{key:c.id,value:c.id},c.ad)))),
+React.createElement(FG,{label:"Sabit Litre Fiyat\u0131 (\u20BA)"},React.createElement("input",{type:"number",step:"0.01",style:S.inp,value:fiyatForm.fiyat||"",onChange:e=>setFiyatForm(f=>({...f,fiyat:+e.target.value}))})),
+React.createElement("div",{style:{fontSize:11,color:C.muted,marginBottom:10}},"Bu cari se\xE7ildi\u011Finde litre fiyat\u0131 alan\u0131 otomatik doldurulur; dilerseniz ikmal eklerken elle de\u011Fi\u015Ftirebilirsiniz."),
+React.createElement("div",{style:{display:"flex",gap:10,justifyContent:"space-between",marginTop:8}},
+cariSabitFiyatBul(fiyatForm.cariId)!=null?React.createElement("button",{style:S.btnR,onClick:()=>cariSabitFiyatSil(fiyatForm.cariId)},"\u{1F5D1} Kald\u0131r"):React.createElement("span",null),
+React.createElement("div",{style:{display:"flex",gap:10}},
+React.createElement("button",{style:S.btnO,onClick:()=>setFiyatModal(!1)},"\u0130ptal"),
+React.createElement("button",{style:S.btn(),onClick:cariSabitFiyatKaydet},"Kaydet")
+)
+)
+),
+
+topluModal&&React.createElement(Modal,{title:"\u{1F4E6} Toplu \u0130kmal Girisi",onClose:()=>setTopluModal(!1),width:640},
+React.createElement("div",{style:{fontSize:12,color:C.muted,marginBottom:14}},"Ayn\u0131 anda birden fazla ara\xE7 i\xE7in ikmal girin (\xF6rn. depo tankeri geldi\u011Finde). Tarih, kaynak ve litre fiyat\u0131 t\xFCm sat\u0131rlar i\xE7in ortak uygulan\u0131r."),
+React.createElement("div",{style:S.g2},
+React.createElement(FG,{label:"Tarih"},React.createElement("input",{type:"date",style:S.inp,value:topluForm.tarih||"",onChange:e=>setTopluForm(f=>({...f,tarih:e.target.value}))})),
+React.createElement(FG,{label:"Kaynak"},React.createElement("select",{style:S.sel,value:topluForm.kaynak||"nakit",onChange:e=>setTopluForm(f=>({...f,kaynak:e.target.value}))},
+React.createElement("option",{value:"nakit"},"\u{1F4B3} Nakit / Kart"),
+React.createElement("option",{value:"cari"},"\u{1F91D} Cariden Veresiye"),
+React.createElement("option",{value:"depo"},"\u{1F3E2} Kendi Depo Stokumuzdan")
+))
+),
+topluForm.kaynak==="cari"&&React.createElement(FG,{label:"Cari"},React.createElement("select",{style:S.sel,value:topluForm.cariId||"",onChange:e=>{const secilenId=idVal(e.target.value),sabit=cariSabitFiyatBul(secilenId);setTopluForm(f=>({...f,cariId:secilenId,fiyat:sabit!=null?sabit:f.fiyat}))}},React.createElement("option",{value:""},"\u2014 Se\xE7iniz \u2014"),cariler.map(c=>React.createElement("option",{key:c.id,value:c.id},c.ad)))),
+topluForm.kaynak==="depo"&&React.createElement(FG,{label:"Depo Stok Kalemi"},React.createElement("select",{style:S.sel,value:topluForm.stokKalemId||"",onChange:e=>setTopluForm(f=>({...f,stokKalemId:idVal(e.target.value)}))},React.createElement("option",{value:""},"\u2014 Se\xE7iniz \u2014"),(yakitStoklari.length?yakitStoklari:envanterKalemleri).map(k=>React.createElement("option",{key:k.id,value:k.id},k.ad," (Mevcut: ",k.miktar," ",k.birim||"Lt",")")))),
+React.createElement(FG,{label:"Litre Fiyat\u0131 (\u20BA)"},React.createElement("input",{type:"number",step:"0.01",style:S.inp,value:topluForm.fiyat||"",onChange:e=>setTopluForm(f=>({...f,fiyat:+e.target.value}))})),
+React.createElement("div",{style:{marginTop:14,marginBottom:8,fontWeight:600,color:C.white,fontSize:13}},"Ara\xE7lar"),
+topluSatirlar.map((satir,index)=>React.createElement("div",{key:index,style:{display:"flex",gap:8,marginBottom:8,alignItems:"center"}},
+React.createElement("select",{style:{...S.sel,flex:2},value:satir.aracId||"",onChange:e=>{const deger=idVal(e.target.value);setTopluSatirlar(satirlar=>satirlar.map((s,i)=>i===index?{...s,aracId:deger}:s))}},React.createElement("option",{value:""},"\u2014 Ara\xE7 Se\xE7iniz \u2014"),araclar.map(a=>React.createElement("option",{key:a.id,value:a.id},a.ad))),
+React.createElement("input",{type:"number",step:"0.01",placeholder:"Litre",style:{...S.inp,flex:1},value:satir.miktar||"",onChange:e=>{const deger=e.target.value;setTopluSatirlar(satirlar=>satirlar.map((s,i)=>i===index?{...s,miktar:deger}:s))}}),
+topluSatirlar.length>1&&React.createElement("button",{type:"button",style:S.btnR,onClick:()=>setTopluSatirlar(satirlar=>satirlar.filter((s,i)=>i!==index))},"\u2715")
+)),
+React.createElement("button",{type:"button",style:S.btnO,onClick:()=>setTopluSatirlar(satirlar=>[...satirlar,{aracId:"",miktar:""}])},"\uFF0B Sat\u0131r Ekle"),
+topluForm.fiyat>0&&React.createElement("div",{style:{...S.alert(C.green),marginTop:12}},"Toplam Tahmini Tutar: ",React.createElement("strong",null,fmtTL(topluSatirlar.reduce((t,s)=>t+(+topluForm.fiyat||0)*(+s.miktar||0),0)))),
+React.createElement(FormError,{msg:topluHata}),
+React.createElement("div",{style:{display:"flex",gap:10,justifyContent:"flex-end",marginTop:14}},
+React.createElement("button",{style:S.btnO,onClick:()=>setTopluModal(!1)},"\u0130ptal"),
+React.createElement("button",{style:S.btn(),onClick:topluKaydet},"Kaydet")
+)
 )
 )
 }
 
-function TelegramYakitSatiri({bildirim:b,araclar:araclar,hesaplar:hesaplar,onOnayla:onOnayla,onReddet:onReddet}){
-const[aracId,setAracId]=useState(""),[toplamFiyat,setToplamFiyat]=useState(""),[litreFiyati,setLitreFiyati]=useState(""),[hesapId,setHesapId]=useState("");
+function TelegramYakitSatiri({bildirim:b,araclar:araclar,hesaplar:hesaplar,personelListesi:personelListesi,yakitlar:yakitlar,onOnayla:onOnayla,onReddet:onReddet}){
+const onerilenAracId=useMemo(()=>{
+const eslesenPersonel=personelListesi.find(p=>p.ad&&b.gonderen&&p.ad.trim().toLocaleLowerCase("tr-TR")===b.gonderen.trim().toLocaleLowerCase("tr-TR"));
+if(!eslesenPersonel)return"";
+const sayimlar={};
+yakitlar.filter(y=>y.personelId===eslesenPersonel.id).forEach(y=>{sayimlar[y.aracId]=(sayimlar[y.aracId]||0)+1});
+const siraliGirdiler=Object.entries(sayimlar).sort((x,y)=>y[1]-x[1]);
+return siraliGirdiler.length?siraliGirdiler[0][0]:""
+},[b.gonderen]);
+const[aracId,setAracId]=useState(onerilenAracId),[toplamFiyat,setToplamFiyat]=useState(""),[litreFiyati,setLitreFiyati]=useState(""),[hesapId,setHesapId]=useState("");
+useEffect(()=>{onerilenAracId&&!aracId&&setAracId(onerilenAracId)},[onerilenAracId]);
 return React.createElement("div",{style:{...S.card,background:C.input,marginBottom:10}},
 React.createElement("div",{style:{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:10}},
 React.createElement("div",null,
@@ -676,7 +816,7 @@ React.createElement("div",{style:{fontSize:12,color:C.text,marginTop:4}},b.mesaj
 b.dosyaUrl&&(b.tur==="foto"?React.createElement("img",{src:b.dosyaUrl,style:{width:80,height:80,objectFit:"cover",borderRadius:8,border:`1px solid ${C.border}`}}):React.createElement("a",{href:b.dosyaUrl,target:"_blank",rel:"noopener noreferrer",style:{color:C.accent,fontSize:12}},"\u{1F4CE} Belgeyi A\xE7"))
 ),
 React.createElement("div",{style:{...S.g3,marginTop:10}},
-React.createElement(FG,{label:"Ara\xE7"},React.createElement("select",{style:S.sel,value:aracId,onChange:e=>setAracId(idVal(e.target.value))},React.createElement("option",{value:""},"\u2014 Se\xE7iniz \u2014"),araclar.map(a=>React.createElement("option",{key:a.id,value:a.id},a.ad)))),
+React.createElement(FG,{label:"Ara\xE7"},React.createElement("select",{style:S.sel,value:aracId,onChange:e=>setAracId(idVal(e.target.value))},React.createElement("option",{value:""},"\u2014 Se\xE7iniz \u2014"),araclar.map(a=>React.createElement("option",{key:a.id,value:a.id},a.ad,a.id===onerilenAracId?" (\xF6nerilen)":""))),onerilenAracId&&React.createElement("div",{style:{fontSize:11,color:C.accent,marginTop:4}},"\u{1F4A1} ",b.gonderen,"'nin en s\u0131k kulland\u0131\u011F\u0131 ara\xE7 \xF6nerildi.")),
 React.createElement(FG,{label:"Toplam Fiyat (\u20BA)"},React.createElement("input",{type:"number",style:S.inp,value:toplamFiyat,onChange:e=>setToplamFiyat(e.target.value)})),
 React.createElement(FG,{label:"Litre Fiyat\u0131 (\u20BA, opsiyonel)"},React.createElement("input",{type:"number",style:S.inp,value:litreFiyati,onChange:e=>setLitreFiyati(e.target.value)}))
 ),
