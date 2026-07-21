@@ -777,6 +777,7 @@ cariSabitFiyatSil=async cariId=>{if(!await fpConfirm("Bu carinin sabit fiyat\u01
 kaynakLabel={nakit:"\u{1F4B3} Nakit/Kart",kart:"\u{1F510} Pompa Kart\u0131",cari:"\u{1F91D} Cari (Veresiye)",depo:"\u{1F3E2} Depo Stoku",telegram:"\u{1F4F1} Telegram"},
 kaynakRenk=YAKIT_KAYNAK_RENK,
 
+yakitGiderKaydet=(tarih,tutar,aciklama,yakitId)=>{if(!(tutar>0))return;const mevcut=LS.get("gelirGider"),yeni={id:uid(),tur:"gider",kategori:"Yak\u0131t",aciklama,tutar,kdv:0,tarih:tarih||today(),hesapId:null,belgeNo:`GID-${(tarih||today()).slice(0,7)}-${String(mevcut.length+1).padStart(3,"0")}`,yakitId};LS.set("gelirGider",[...mevcut,yeni])},
 ikmalKaydet=()=>{
 const kaynak=ikmalForm.kaynak||"nakit";
 if(!ikmalForm.aracId){setIkmalHata("Ara\xE7 se\xE7imi zorunludur.");return}
@@ -797,6 +798,7 @@ LS.set("stokHareketleri",yeniStokHareketleri),setStokHareketleri(yeniStokHareket
 const yeniYakit={id:uid(),aracId:ikmalForm.aracId,personelId:ikmalForm.personelId||null,tarih:ikmalForm.tarih||today(),saat:ikmalForm.saat||"",kaynak:"depo",stokKalemId:kalem.id,miktar:+ikmalForm.miktar,fiyat:birimFiyat,toplam:toplamMaliyet,depo:kalem.ad};
 const yeniYakitlar=[...yakitlar,yeniYakit];
 LS.set("yakitlar",yeniYakitlar),setYakitlar(yeniYakitlar),setIkmalModal(!1);
+yakitGiderKaydet(yeniYakit.tarih,toplamMaliyet,`Yak\u0131t ikmali (Depo) \u2014 ${(araclar.find(a=>a.id===ikmalForm.aracId)||{}).ad||""}`,yeniYakit.id);
 return
 }
 if(!(+ikmalForm.toplamFiyat>0)){setIkmalHata("Toplam fiyat 0'dan b\xFCy\xFCk olmal\u0131d\u0131r.");return}
@@ -813,7 +815,8 @@ fpToast(`\u2705 ${(cari==null?void 0:cari.ad)||"Cari"} ad\u0131na ${fmtTL(toplam
 }
 const yeniIkmalKaydi={id:ikmalForm.id||uid(),aracId:ikmalForm.aracId,personelId:ikmalForm.personelId||null,tarih:ikmalForm.tarih||today(),saat:ikmalForm.saat||"",kaynak,cariId:kaynak==="cari"?ikmalForm.cariId:null,faturaId,miktar:litre,fiyat:birimFiyat,toplam:toplamTutar,depo:ikmalForm.depo||""};
 const yeniYakitlar=ikmalForm.id?yakitlar.map(y=>y.id===ikmalForm.id?yeniIkmalKaydi:y):[...yakitlar,yeniIkmalKaydi];
-LS.set("yakitlar",yeniYakitlar),setYakitlar(yeniYakitlar),setIkmalModal(!1)
+LS.set("yakitlar",yeniYakitlar),setYakitlar(yeniYakitlar),setIkmalModal(!1);
+!ikmalForm.id&&yakitGiderKaydet(yeniIkmalKaydi.tarih,toplamTutar,`Yak\u0131t ikmali (${kaynakLabel[kaynak]||kaynak}) \u2014 ${(araclar.find(a=>a.id===ikmalForm.aracId)||{}).ad||""}`,yeniIkmalKaydi.id)
 },
 
 topluKaydet=()=>{
@@ -857,7 +860,9 @@ setTopluModal(!1),setTopluSatirlar([{aracId:"",miktar:""}]),setTopluForm({})
 ikmalSil=async id=>{
 if(!await fpConfirm("Bu ikmal kayd\u0131 silinsin mi? \u0130lgili fatura veya stok hareketi varsa onlar etkilenmez, elle kontrol edin."))return;
 const yeniYakitlar=yakitlar.filter(y=>y.id!==id);
-LS.set("yakitlar",yeniYakitlar),setYakitlar(yeniYakitlar)
+LS.set("yakitlar",yeniYakitlar),setYakitlar(yeniYakitlar);
+const gelirGiderListesi=LS.get("gelirGider"),temizlenmis=gelirGiderListesi.filter(g=>g.yakitId!==id);
+temizlenmis.length!==gelirGiderListesi.length&&LS.set("gelirGider",temizlenmis)
 },
 
 aiFisOku=async dosya=>{
@@ -878,6 +883,7 @@ birimFiyat=+litreFiyati||varsayilanFiyat||0,litre=birimFiyat>0?Math.round(toplam
 const yeniYakit={id:uid(),aracId,personelId:null,tarih:today(),kaynak:"telegram",telegramBildirimId:bildirimId,fotografUrl:(bildirim==null?void 0:bildirim.dosyaUrl)||null,miktar:litre,fiyat:birimFiyat,toplam:+toplamFiyat,depo:"Telegram \xFCzerinden bildirildi"};
 const yeniYakitlar=[...yakitlar,yeniYakit];
 LS.set("yakitlar",yeniYakitlar),setYakitlar(yeniYakitlar);
+yakitGiderKaydet(yeniYakit.tarih,+toplamFiyat,`Yak\u0131t ikmali (Telegram) \u2014 ${(araclar.find(a=>a.id===aracId)||{}).ad||""}`,yeniYakit.id);
 if(hesapId){
 const kasaHareketleri=LS.get("kasaHareketleri"),
 yeniHareket={id:uid(),hesapId,tur:"cikis",tutar:+toplamFiyat,tarih:today(),aciklama:`Telegram \xFCzerinden bildirilen yak\u0131t ikmali (${(bildirim==null?void 0:bildirim.gonderen)||""})`,belgeNo:`KH-${String(kasaHareketleri.length+1).padStart(3,"0")}`,kategori:"yakit",belgeUrl:(bildirim==null?void 0:bildirim.dosyaUrl)||null,kaynak:"telegram"};
@@ -898,8 +904,10 @@ manuelPompaKaydet=()=>{
 const birimFiyat=+ikmalForm.fiyat||varsayilanFiyat||0,toplamTutar=+ikmalForm.toplamFiyat||0,litre=birimFiyat>0?Math.round(toplamTutar/birimFiyat*100)/100:0,
 yeniOtomatik=[...otomatikIkmaller,{...ikmalForm,id:uid(),tarih:today(),fiyat:birimFiyat,miktar:litre,toplam:toplamTutar,onayli:!0}];
 LS.set("otomatikIkmaller",yeniOtomatik),setOtomatikIkmaller(yeniOtomatik);
-const yeniYakitlar=[...yakitlar,{id:uid(),aracId:ikmalForm.aracId,personelId:ikmalForm.personelId||null,tarih:today(),kaynak:"kart",kart:ikmalForm.kart||"",miktar:litre,fiyat:birimFiyat,toplam:toplamTutar,depo:"Pompa"}];
-LS.set("yakitlar",yeniYakitlar),setYakitlar(yeniYakitlar),setIkmalModal(!1)
+const yeniKayit={id:uid(),aracId:ikmalForm.aracId,personelId:ikmalForm.personelId||null,tarih:today(),kaynak:"kart",kart:ikmalForm.kart||"",miktar:litre,fiyat:birimFiyat,toplam:toplamTutar,depo:"Pompa"},
+yeniYakitlar=[...yakitlar,yeniKayit];
+LS.set("yakitlar",yeniYakitlar),setYakitlar(yeniYakitlar),setIkmalModal(!1);
+yakitGiderKaydet(yeniKayit.tarih,toplamTutar,`Yak\u0131t ikmali (Pompa Kart\u0131) \u2014 ${(araclar.find(a=>a.id===ikmalForm.aracId)||{}).ad||""}`,yeniKayit.id)
 },
 otomatikOnayla=id=>{
 const yeni=otomatikIkmaller.map(o=>o.id===id?{...o,onayli:!0}:o);
