@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FiloPro — Konum Paylaş</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, Arial, sans-serif;
+    background: #0f1117; color: #e5e7eb; min-height: 100vh;
+    display: flex; align-items: center; justify-content: center; padding: 20px;
+  }
+  .box {
+    width: 100%; max-width: 380px; background: #1e2333; border: 1px solid #2a3050;
+    border-radius: 16px; padding: 28px 24px; text-align: center;
+  }
+  .icon { font-size: 44px; margin-bottom: 10px; }
+  h1 { font-size: 18px; margin: 0 0 6px; }
+  p.muted { color: #8b93a8; font-size: 13px; margin: 0 0 22px; line-height: 1.5; }
+  input {
+    width: 100%; padding: 14px; font-size: 22px; text-align: center; letter-spacing: 6px;
+    border-radius: 10px; border: 1px solid #2a3050; background: #14171f; color: #fff; margin-bottom: 14px;
+  }
+  button {
+    width: 100%; padding: 13px; font-size: 14px; font-weight: 700; border: none; border-radius: 10px;
+    background: #f59e0b; color: #14171f; cursor: pointer; margin-bottom: 10px;
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  button.secondary { background: transparent; border: 1px solid #2a3050; color: #e5e7eb; }
+  .status { font-size: 13px; margin-top: 16px; padding: 12px; border-radius: 10px; display: none; line-height: 1.6; }
+  .status.ok { background: rgba(34,197,94,.12); color: #4ade80; display: block; }
+  .status.err { background: rgba(239,68,68,.12); color: #f87171; display: block; }
+  .status.info { background: rgba(59,130,246,.12); color: #60a5fa; display: block; }
+  .pulse { display:inline-block; width:8px; height:8px; border-radius:50%; background:#4ade80; margin-right:6px; animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="icon">📍</div>
+  <h1 id="title">FiloPro Konum Paylaşımı</h1>
+  <p class="muted" id="subtitle">Devam etmek için PIN kodunuzu girin.</p>
+
+  <div id="pinScreen">
+    <input type="tel" id="pinInput" maxlength="6" inputmode="numeric" placeholder="••••">
+    <button id="baslatBtn" onclick="pinDogrula()">Paylaşımı Başlat</button>
+  </div>
+
+  <div id="paylasimEkrani" style="display:none">
+    <div style="font-size:15px;font-weight:700;margin-bottom:4px;" id="adSoyad"></div>
+    <div class="status ok" style="display:block;">
+      <span class="pulse"></span>Konum paylaşılıyor
+      <div id="sonGuncelleme" style="margin-top:4px;opacity:.8;"></div>
+    </div>
+    <button class="secondary" onclick="paylasimDurdur()" style="margin-top:14px;">Paylaşımı Durdur</button>
+  </div>
+
+  <div id="durum" class="status"></div>
+</div>
+
+<!-- ============================================================ -->
+<!-- AŞAĞIYA, FiloPro Ayarlar > Canlı Konum sekmesindeki AYNI     -->
+<!-- "Kutu Adı" değerini yapıştırın (kvdb.io/xxxx adresindeki kod) -->
+<!-- ============================================================ -->
+<script>
+const KVDB_KUTU_ADI = "BURAYA_KUTU_ADI";
+</script>
+<!-- ============================================================ -->
+
+<script>
+let watchId, aktifPersonel;
+
+function kvdbUrl(anahtar) {
+  return `https://kvdb.io/${KVDB_KUTU_ADI}/${anahtar}`;
+}
+
+function durumGoster(mesaj, tip) {
+  const el = document.getElementById('durum');
+  el.className = 'status ' + tip;
+  el.textContent = mesaj;
+}
+
+if (KVDB_KUTU_ADI === "BURAYA_KUTU_ADI") {
+  durumGoster('⚠️ Bu sayfa henüz kurulmamış. Yöneticinizle iletişime geçin.', 'err');
+  document.getElementById('baslatBtn').disabled = true;
+}
+
+async function pinDogrula() {
+  const pin = document.getElementById('pinInput').value.trim();
+  if (!pin) return;
+  document.getElementById('baslatBtn').disabled = true;
+  document.getElementById('baslatBtn').textContent = 'Kontrol ediliyor...';
+  durumGoster('', '');
+  try {
+    const res = await fetch(kvdbUrl('personelRosteri'));
+    if (!res.ok) throw new Error('Kutuya erişilemedi (kutu adını kontrol edin).');
+    const liste = await res.json();
+    const bulunan = (liste || []).find(p => String(p.pinKodu) === pin);
+    if (!bulunan) {
+      durumGoster('PIN kodu bulunamadı. Lütfen kontrol edip tekrar deneyin.', 'err');
+      document.getElementById('baslatBtn').disabled = false;
+      document.getElementById('baslatBtn').textContent = 'Paylaşımı Başlat';
+      return;
+    }
+    aktifPersonel = bulunan;
+    konumPaylasimiBaslat();
+  } catch (e) {
+    durumGoster('Bağlantı hatası: ' + e.message, 'err');
+    document.getElementById('baslatBtn').disabled = false;
+    document.getElementById('baslatBtn').textContent = 'Paylaşımı Başlat';
+  }
+}
+
+function konumPaylasimiBaslat() {
+  if (!navigator.geolocation) {
+    durumGoster('Bu tarayıcı konum paylaşımını desteklemiyor.', 'err');
+    return;
+  }
+  document.getElementById('pinScreen').style.display = 'none';
+  document.getElementById('paylasimEkrani').style.display = 'block';
+  document.getElementById('adSoyad').textContent = aktifPersonel.ad;
+
+  watchId = navigator.geolocation.watchPosition(
+    (pos) => {
+      const veri = {
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+        dogruluk: pos.coords.accuracy,
+        zaman: Date.now(),
+        ad: aktifPersonel.ad
+      };
+      fetch(kvdbUrl('konum-' + aktifPersonel.id), {
+        method: 'PUT',
+        body: JSON.stringify(veri)
+      }).catch(() => {});
+      const simdi = new Date();
+      document.getElementById('sonGuncelleme').textContent =
+        'Son güncelleme: ' + simdi.toLocaleTimeString('tr-TR');
+    },
+    (err) => {
+      durumGoster('Konum alınamadı: ' + err.message + ' — Konum izni verdiğinizden emin olun.', 'err');
+    },
+    { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 }
+  );
+}
+
+function paylasimDurdur() {
+  if (watchId) navigator.geolocation.clearWatch(watchId);
+  if (aktifPersonel) {
+    fetch(kvdbUrl('konum-' + aktifPersonel.id), { method: 'DELETE' }).catch(() => {});
+  }
+  document.getElementById('paylasimEkrani').style.display = 'none';
+  document.getElementById('pinScreen').style.display = 'block';
+  document.getElementById('pinInput').value = '';
+  document.getElementById('baslatBtn').disabled = false;
+  document.getElementById('baslatBtn').textContent = 'Paylaşımı Başlat';
+  durumGoster('Paylaşım durduruldu.', 'info');
+}
+</script>
+</body>
+</html>
