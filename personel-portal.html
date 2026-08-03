@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FiloPro — Personel Portalı</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, Arial, sans-serif;
+    background: #0f1117; color: #e5e7eb; min-height: 100vh;
+  }
+  .wrap { max-width: 460px; margin: 0 auto; padding: 24px 18px 60px; }
+  .top { text-align: center; margin-bottom: 24px; }
+  .top .icon { font-size: 40px; margin-bottom: 6px; }
+  .top h1 { font-size: 17px; margin: 0; }
+  .top .sub { color: #8b93a8; font-size: 12.5px; margin-top: 4px; }
+  input, select, textarea {
+    width: 100%; padding: 12px 14px; font-size: 14px;
+    border-radius: 10px; border: 1px solid #2a3050; background: #14171f; color: #fff;
+    margin-bottom: 12px; font-family: inherit;
+  }
+  input[type=tel] { font-size: 24px; text-align: center; letter-spacing: 6px; }
+  label { display: block; font-size: 12px; color: #8b93a8; margin-bottom: 5px; }
+  button {
+    width: 100%; padding: 13px; font-size: 14px; font-weight: 700; border: none; border-radius: 10px;
+    background: #f59e0b; color: #14171f; cursor: pointer; margin-bottom: 10px;
+  }
+  button.secondary { background: transparent; border: 1px solid #2a3050; color: #e5e7eb; }
+  button.card-btn {
+    background: #1e2333; border: 1px solid #2a3050; color: #fff; text-align: left;
+    padding: 16px; display: flex; align-items: center; gap: 12px; font-size: 14px; font-weight: 600;
+  }
+  button.card-btn .em { font-size: 24px; }
+  .status { font-size: 13px; margin-top: 12px; padding: 12px; border-radius: 10px; display: none; line-height: 1.6; }
+  .status.ok { background: rgba(34,197,94,.12); color: #4ade80; display: block; }
+  .status.err { background: rgba(239,68,68,.12); color: #f87171; display: block; }
+  .status.info { background: rgba(59,130,246,.12); color: #60a5fa; display: block; }
+  .hidden { display: none !important; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .back { color: #8b93a8; font-size: 13px; cursor: pointer; margin-bottom: 16px; display: inline-block; }
+  .card { background: #1e2333; border: 1px solid #2a3050; border-radius: 14px; padding: 20px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="icon">🚜</div>
+    <h1>FiloPro Personel Portalı</h1>
+    <div class="sub" id="altYazi">Devam etmek için PIN kodunuzu girin</div>
+  </div>
+
+  <!-- PIN GİRİŞ -->
+  <div id="pinEkrani" class="card">
+    <input type="tel" id="pinInput" maxlength="6" inputmode="numeric" placeholder="••••">
+    <button id="pinBtn" onclick="pinDogrula()">Giriş Yap</button>
+    <div id="pinHata" class="status"></div>
+  </div>
+
+  <!-- ANA MENÜ -->
+  <div id="anaMenu" class="hidden">
+    <div style="text-align:center;margin-bottom:18px;">
+      <div style="font-size:15px;font-weight:700;" id="hosgeldinAd"></div>
+      <div class="back" onclick="cikisYap()">↩ Çıkış / farklı kullanıcı</div>
+    </div>
+    <button class="card-btn" onclick="ekranGoster('masrafEkrani')"><span class="em">🧾</span> Masraf Fişi Ekle</button>
+    <button class="card-btn" onclick="ekranGoster('mazotEkrani')"><span class="em">⛽</span> Mazot Alımı Ekle</button>
+    <button class="card-btn" onclick="ekranGoster('girisCikisEkrani')"><span class="em">🕐</span> Giriş / Çıkış Yap</button>
+    <button class="card-btn" onclick="ekranGoster('izinEkrani')"><span class="em">🏖️</span> İzin Talebi Oluştur</button>
+  </div>
+
+  <!-- MASRAF FİŞİ -->
+  <div id="masrafEkrani" class="hidden card">
+    <div class="back" onclick="ekranGoster('anaMenu')">← Geri</div>
+    <label>Kategori</label>
+    <select id="masrafKategori">
+      <option>Yakıt</option><option>Personel</option><option>Bakım-Onarım</option>
+      <option>Yedek Parça</option><option>Ofis Gideri</option><option>Diğer Gider</option>
+    </select>
+    <label>Tutar (₺)</label>
+    <input type="number" id="masrafTutar" placeholder="0">
+    <label>Açıklama</label>
+    <textarea id="masrafAciklama" rows="3" placeholder="Ne için harcandı?"></textarea>
+    <button onclick="masrafGonder()">Gönder</button>
+    <div id="masrafDurum" class="status"></div>
+  </div>
+
+  <!-- MAZOT ALIMI -->
+  <div id="mazotEkrani" class="hidden card">
+    <div class="back" onclick="ekranGoster('anaMenu')">← Geri</div>
+    <label>Araç</label>
+    <select id="mazotArac"></select>
+    <div class="grid2">
+      <div><label>Litre</label><input type="number" id="mazotMiktar" placeholder="0"></div>
+      <div><label>Birim Fiyat (₺)</label><input type="number" id="mazotBirimFiyat" placeholder="0"></div>
+    </div>
+    <label>Toplam Tutar (₺)</label>
+    <input type="number" id="mazotTutar" placeholder="0">
+    <button onclick="mazotGonder()">Gönder</button>
+    <div id="mazotDurum" class="status"></div>
+  </div>
+
+  <!-- GİRİŞ ÇIKIŞ -->
+  <div id="girisCikisEkrani" class="hidden card">
+    <div class="back" onclick="ekranGoster('anaMenu')">← Geri</div>
+    <div style="font-size:13px;color:#8b93a8;margin-bottom:16px;">Şu an saat: <strong id="anlikSaat" style="color:#fff;"></strong></div>
+    <button onclick="girisCikisGonder('giris')" style="background:#22c55e;">🟢 Giriş Yap</button>
+    <button onclick="girisCikisGonder('cikis')" style="background:#ef4444;color:#fff;">🔴 Çıkış Yap</button>
+    <div id="girisCikisDurum" class="status"></div>
+  </div>
+
+  <!-- İZİN TALEBİ -->
+  <div id="izinEkrani" class="hidden card">
+    <div class="back" onclick="ekranGoster('anaMenu')">← Geri</div>
+    <label>İzin Türü</label>
+    <select id="izinTur">
+      <option value="yillik">Yıllık İzin</option>
+      <option value="mazeret">Mazeret İzni</option>
+      <option value="hastalik">Rapor / Hastalık</option>
+      <option value="ucretsiz">Ücretsiz İzin</option>
+    </select>
+    <div class="grid2">
+      <div><label>Başlangıç</label><input type="date" id="izinBaslangic"></div>
+      <div><label>Bitiş</label><input type="date" id="izinBitis"></div>
+    </div>
+    <label>Açıklama (opsiyonel)</label>
+    <textarea id="izinAciklama" rows="2"></textarea>
+    <button onclick="izinGonder()">Gönder</button>
+    <div id="izinDurum" class="status"></div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- AŞAĞIYA, FiloPro Ayarlar > Canlı Konum sekmesindeki AYNI     -->
+<!-- "Kutu Adı" değerini yapıştırın (kvdb.io/xxxx adresindeki kod) -->
+<!-- ============================================================ -->
+<script>
+const KVDB_KUTU_ADI = "BURAYA_KUTU_ADI";
+</script>
+<!-- ============================================================ -->
+
+<script>
+let aktifPersonel = null;
+let araclarListesi = [];
+
+function kvdbUrl(anahtar) {
+  return `https://kvdb.io/${KVDB_KUTU_ADI}/${anahtar}`;
+}
+async function kvdbOku(anahtar) {
+  const r = await fetch(kvdbUrl(anahtar));
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error('Bulut kutusuna erişilemedi.');
+  return r.json();
+}
+async function kvdbYaz(anahtar, deger) {
+  const r = await fetch(kvdbUrl(anahtar), { method: 'PUT', body: JSON.stringify(deger) });
+  if (!r.ok) throw new Error('Gönderilemedi, internet bağlantınızı kontrol edin.');
+}
+function uid() {
+  return Date.now() + '-' + Math.random().toString(36).slice(2, 7);
+}
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+function durumGoster(elId, mesaj, tip) {
+  const el = document.getElementById(elId);
+  el.className = 'status ' + tip;
+  el.textContent = mesaj;
+}
+
+if (KVDB_KUTU_ADI === "BURAYA_KUTU_ADI") {
+  durumGoster('pinHata', '⚠️ Bu sayfa henüz kurulmamış. Yöneticinizle iletişime geçin.', 'err');
+  document.getElementById('pinBtn').disabled = true;
+}
+
+async function pinDogrula() {
+  const pin = document.getElementById('pinInput').value.trim();
+  if (!pin) return;
+  document.getElementById('pinBtn').disabled = true;
+  document.getElementById('pinBtn').textContent = 'Kontrol ediliyor...';
+  durumGoster('pinHata', '', '');
+  try {
+    const liste = (await kvdbOku('personelRosteri')) || [];
+    const bulunan = liste.find(p => String(p.pinKodu) === pin);
+    if (!bulunan) {
+      durumGoster('pinHata', 'PIN kodu bulunamadı. Yöneticinizin sizi bu sisteme eklediğinden emin olun.', 'err');
+      document.getElementById('pinBtn').disabled = false;
+      document.getElementById('pinBtn').textContent = 'Giriş Yap';
+      return;
+    }
+    aktifPersonel = bulunan;
+    araclarListesi = (await kvdbOku('araclarRosteri')) || [];
+    girisiTamamla();
+  } catch (e) {
+    durumGoster('pinHata', 'Bağlantı hatası: ' + e.message, 'err');
+    document.getElementById('pinBtn').disabled = false;
+    document.getElementById('pinBtn').textContent = 'Giriş Yap';
+  }
+}
+
+function girisiTamamla() {
+  document.getElementById('pinEkrani').classList.add('hidden');
+  document.getElementById('anaMenu').classList.remove('hidden');
+  document.getElementById('altYazi').textContent = 'Ne yapmak istersiniz?';
+  document.getElementById('hosgeldinAd').textContent = '👋 Hoş geldin, ' + aktifPersonel.ad;
+  const sel = document.getElementById('mazotArac');
+  sel.innerHTML = araclarListesi.map(a => `<option value="${a.id}">${a.ad}${a.plaka ? ' · ' + a.plaka : ''}</option>`).join('');
+  const saatEl = document.getElementById('anlikSaat');
+  if (saatEl) saatEl.textContent = new Date().toTimeString().slice(0, 5);
+}
+
+function ekranGoster(id) {
+  ['anaMenu', 'masrafEkrani', 'mazotEkrani', 'girisCikisEkrani', 'izinEkrani'].forEach(e => {
+    document.getElementById(e).classList.add('hidden');
+  });
+  document.getElementById(id).classList.remove('hidden');
+  document.getElementById('altYazi').textContent = id === 'anaMenu' ? 'Ne yapmak istersiniz?' : '';
+  if (id === 'girisCikisEkrani') {
+    document.getElementById('anlikSaat').textContent = new Date().toTimeString().slice(0, 5);
+  }
+}
+
+function cikisYap() {
+  aktifPersonel = null;
+  document.getElementById('pinInput').value = '';
+  document.getElementById('anaMenu').classList.add('hidden');
+  document.getElementById('pinEkrani').classList.remove('hidden');
+  document.getElementById('altYazi').textContent = 'Devam etmek için PIN kodunuzu girin';
+  document.getElementById('pinBtn').disabled = false;
+  document.getElementById('pinBtn').textContent = 'Giriş Yap';
+}
+
+async function kuyrugaEkle(tur, veri, durumElId) {
+  try {
+    const mevcut = (await kvdbOku('personelKuyruk')) || [];
+    const yeni = {
+      id: uid(), tur, personelId: aktifPersonel.id, personelAd: aktifPersonel.ad,
+      tarih: today(), veri, gonderimZamani: Date.now()
+    };
+    await kvdbYaz('personelKuyruk', [...mevcut, yeni]);
+    durumGoster(durumElId, '✅ Gönderildi, yöneticiniz onayladığında sisteme işlenecek.', 'ok');
+    return true;
+  } catch (e) {
+    durumGoster(durumElId, '⚠️ Gönderilemedi: ' + e.message, 'err');
+    return false;
+  }
+}
+
+async function masrafGonder() {
+  const kategori = document.getElementById('masrafKategori').value;
+  const tutar = document.getElementById('masrafTutar').value;
+  const aciklama = document.getElementById('masrafAciklama').value;
+  if (!tutar || +tutar <= 0) { durumGoster('masrafDurum', 'Tutar girin.', 'err'); return; }
+  const ok = await kuyrugaEkle('masraf', { kategori, tutar, aciklama }, 'masrafDurum');
+  if (ok) {
+    document.getElementById('masrafTutar').value = '';
+    document.getElementById('masrafAciklama').value = '';
+  }
+}
+
+async function mazotGonder() {
+  const aracId = document.getElementById('mazotArac').value;
+  const miktar = document.getElementById('mazotMiktar').value;
+  const birimFiyat = document.getElementById('mazotBirimFiyat').value;
+  const tutar = document.getElementById('mazotTutar').value;
+  if (!aracId) { durumGoster('mazotDurum', 'Araç seçin.', 'err'); return; }
+  if (!tutar || +tutar <= 0) { durumGoster('mazotDurum', 'Tutar girin.', 'err'); return; }
+  const ok = await kuyrugaEkle('mazot', { aracId, miktar, birimFiyat, tutar }, 'mazotDurum');
+  if (ok) {
+    document.getElementById('mazotMiktar').value = '';
+    document.getElementById('mazotBirimFiyat').value = '';
+    document.getElementById('mazotTutar').value = '';
+  }
+}
+
+async function girisCikisGonder(yon) {
+  const saat = new Date().toTimeString().slice(0, 5);
+  await kuyrugaEkle(yon, { saat }, 'girisCikisDurum');
+}
+
+async function izinGonder() {
+  const tur = document.getElementById('izinTur').value;
+  const baslangic = document.getElementById('izinBaslangic').value;
+  const bitis = document.getElementById('izinBitis').value;
+  const aciklama = document.getElementById('izinAciklama').value;
+  if (!baslangic || !bitis) { durumGoster('izinDurum', 'Başlangıç ve bitiş tarihi girin.', 'err'); return; }
+  const gun = Math.max(1, Math.round((new Date(bitis) - new Date(baslangic)) / 86400000) + 1);
+  const ok = await kuyrugaEkle('izin', { tur, baslangic, bitis, gun, aciklama }, 'izinDurum');
+  if (ok) {
+    document.getElementById('izinBaslangic').value = '';
+    document.getElementById('izinBitis').value = '';
+    document.getElementById('izinAciklama').value = '';
+  }
+}
+</script>
+</body>
+</html>
