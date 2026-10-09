@@ -7,7 +7,7 @@
 //   2) Push bildirimleri — sunucudan gelen bir push mesajını, sekme kapalı olsa bile
 //      işletim sisteminin bildirim merkezinde gösterir.
 
-const CACHE_ADI = 'filopro-v2'; // v1 -> v2: app.js artık ayrı derlenmiş bir dosya (bkz. README)
+const CACHE_ADI = 'filopro-v3'; // v3: Sefer Yakıt Hesabı modülü eklendi
 const ONBELLEGE_ALINACAKLAR = ['./', './index.html', './app.js'];
 
 self.addEventListener('install', (event) => {
